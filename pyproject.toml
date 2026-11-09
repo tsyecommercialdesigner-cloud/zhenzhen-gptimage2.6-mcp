@@ -1,0 +1,27 @@
+[project]
+name = "zhenzhen-gptimage2-6-mcp"
+version = "0.1.0"
+description = "Local MCP image generation server"
+requires-python = "==3.12.14"
+dependencies = [
+    "fastmcp>=2,<3",
+    "httpx>=0.27,<1",
+    "pillow>=11,<13",
+    "python-dotenv>=1,<2",
+]
+
+[project.scripts]
+zhenzhen-gptimage = "zhenzhen_gptimage.mcp_api.main:main"
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/zhenzhen_gptimage"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/zhenzhen_gptimage/repository/schema_v1.sql" = "zhenzhen_gptimage/repository/schema_v1.sql"
