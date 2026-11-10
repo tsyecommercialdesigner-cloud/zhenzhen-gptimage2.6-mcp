@@ -4,11 +4,12 @@ import asyncio
 from pathlib import Path
 import random
 import time
-from zhenzhen_gptimage.artifacts.storage import write_response, ResponseWriter
+from zhenzhen_gptimage.artifacts.storage import write_response, inspect_response, ResponseWriter
 from zhenzhen_gptimage.generation.admission import _finish_thread
 from zhenzhen_gptimage.generation.snapshot import RequestSnapshot
 from zhenzhen_gptimage.providers.t8_star.client import ProviderError, build_request
-from zhenzhen_gptimage.repository.tasks import start_attempt, transition, publish_images, StateConflict
+from zhenzhen_gptimage.repository.tasks import start_attempt, transition, publish_images, stage_gif_size_mismatch, record_remote_task, StateConflict, RemoteCapacityBusy
+from zhenzhen_gptimage.artifacts.output import ImageResultError
 from zhenzhen_gptimage.generation.task_locks import TaskLocks
 
 def _now_ms(): return time.time_ns() // 1_000_000
@@ -26,6 +27,7 @@ class Scheduler:
         if not 1 <= concurrency <= 6: raise ValueError('invalid concurrency')
         self.worker, self.provider, self.data_dir, self.materializer = worker, provider, data_dir, materializer
         self.semaphore = asyncio.Semaphore(concurrency)
+        self.concurrency = concurrency
         self.response_limit = response_limit
         self.inflight = {}
         self.no_retry = set()
@@ -83,6 +85,14 @@ class Scheduler:
     async def _execute(self, task_id):
         while not self.closing:
             row = await self._row(task_id)
+            if row['status'] in ('submitting','unknown'):
+                remote = await self.worker.fetchone('SELECT remote_id FROM remote_tasks WHERE task_id=?',(task_id,))
+                if remote is not None:
+                    async with self.semaphore:
+                        artifact = await self._poll_remote(task_id, remote['remote_id'], row['deadline_at'])
+                    if artifact is not None:
+                        await self._materialize(task_id, artifact, row['deadline_at'])
+                return
             if row['status'] not in ('queued','retry_wait'): return
             now = _now_ms()
             if task_id in self.no_retry:
@@ -119,14 +129,22 @@ class Scheduler:
                     await self._transition(row,'cancelled',reason='client_cancelled' if task_id in self.no_retry else 'shutdown')
                     return
                 try:
-                    attempt = await self.worker.run(start_attempt,task_id,row['revision'],_now_ms())
+                    attempt = await self.worker.run(lambda db: start_attempt(db,task_id,row['revision'],_now_ms(),concurrency=self.concurrency))
+                except RemoteCapacityBusy:
+                    await asyncio.sleep(0.25)
+                    continue
                 except StateConflict:
                     continue
                 row = await self._row(task_id)
                 try:
                     remaining = max(0.0,(row['deadline_at']-_now_ms())/1000)
                     async with asyncio.timeout(remaining):
-                        if hasattr(self.provider, 'generate_stream'):
+                        if snapshot.execution_mode == 'async':
+                            remote_id = await self.provider.submit_async(snapshot,remaining_seconds=remaining)
+                            await asyncio.shield(self.worker.run(record_remote_task,task_id,row['revision'],remote_id,_now_ms()))
+                            artifact = await self._poll_remote(task_id,remote_id,row['deadline_at'])
+                            if artifact is None: return
+                        elif hasattr(self.provider, 'generate_stream'):
                             writer = await _finish_thread(ResponseWriter, self.data_dir, task_id, attempt, self.response_limit)
                             try:
                                 async def write_chunk(chunk):
@@ -139,8 +157,9 @@ class Scheduler:
                             # Isolated test adapters may return a complete bounded response.
                             raw = await self.provider.generate(snapshot,reference_bytes,remaining_seconds=remaining)
                             artifact = await _finish_thread(write_response,self.data_dir,task_id,attempt,[raw],max_bytes=self.response_limit)
-                        await self._transition(row,'materializing',reason='response_received',response_ref=artifact.local_path,
-                            attempt_certainty='response_received',http_status=200)
+                        if snapshot.execution_mode != 'async':
+                            await self._transition(row,'materializing',reason='response_received',response_ref=artifact.local_path,
+                                attempt_certainty='response_received',http_status=200)
                 except asyncio.CancelledError:
                     await asyncio.shield(self._mark_unknown(task_id))
                     raise
@@ -161,25 +180,76 @@ class Scheduler:
                 except (TimeoutError, OSError, ValueError):
                     await self._mark_unknown(task_id)
                     return
-            # Do not occupy a generation concurrency slot while processing local output.
+            await self._materialize(task_id,artifact,row['deadline_at'])
+            return
+
+    async def _materialize(self, task_id, artifact, deadline_at):
             row = await self._row(task_id)
             if row['status'] != 'materializing': return
+            snapshot = RequestSnapshot.model_validate_json(row['snapshot_json'])
             try:
-                remaining = (row['deadline_at']-_now_ms())/1000
+                remaining = (deadline_at-_now_ms())/1000
                 if remaining <= 0: raise TimeoutError()
                 async with asyncio.timeout(remaining):
                     async with self.response_parsing:
                         raw = await _finish_thread(Path(artifact.local_path).read_bytes)
+                        expected = None if snapshot.channel=='chat' or snapshot.size is not None else (snapshot.width,snapshot.height)
+                        kwargs = {} if snapshot.output_format is None else {'expected_format':snapshot.output_format,
+                            'accept_actual_size':snapshot.size_policy=='accept_actual'}
+                        if snapshot.size and ':' in snapshot.size:
+                            kwargs['expected_ratio']=tuple(map(int,snapshot.size.split(':')))
+                        if snapshot.output_format=='gif':
+                            kwargs.update(expected_frame_count=snapshot.frame_count,expected_frame_duration_ms=snapshot.frame_duration_ms)
                         images = await self.materializer.materialize(task_id,raw,channel=snapshot.channel,
-                            expected_size=None if snapshot.channel=='chat' else (snapshot.width,snapshot.height),
-                            deadline=asyncio.get_running_loop().time()+remaining)
+                            expected_size=expected, deadline=asyncio.get_running_loop().time()+remaining, **kwargs)
                         await self.worker.run(publish_images,task_id,row['revision'],images,_now_ms())
             except asyncio.CancelledError:
                 await asyncio.shield(self._mark_recovery(task_id))
                 raise
+            except ImageResultError as exc:
+                if snapshot.output_format=='gif' and exc.artifacts:
+                    await self.worker.run(stage_gif_size_mismatch,task_id,row['revision'],exc.artifacts,_now_ms())
+                else:
+                    await self._mark_recovery(task_id)
             except Exception:
                 await self._mark_recovery(task_id)
             return
+
+    async def _poll_remote(self, task_id, remote_id, deadline_at):
+        while not self.closing and _now_ms() < deadline_at:
+            remaining=(deadline_at-_now_ms())/1000
+            try:
+                status, raw=await self.provider.query_async(remote_id,remaining_seconds=remaining)
+            except ProviderError:
+                await asyncio.sleep(min(3,max(0,remaining)))
+                continue
+            await self.worker.run(lambda db: db.execute('UPDATE remote_tasks SET remote_status=?,updated_at=? WHERE task_id=? AND remote_id=?',(status,_now_ms(),task_id,remote_id)))
+            if status == 'FAILURE':
+                row=await self._row(task_id)
+                await self._transition(row,'failed',reason='remote_failed',error_category='PROVIDER_REJECTED',
+                    **({'attempt_certainty':'response_received'} if row['status']=='submitting' else {}))
+                return None
+            if status == 'SUCCESS':
+                row=await self._row(task_id)
+                artifact=await _finish_thread(inspect_response,self.data_dir,task_id,row['attempt_count'])
+                if artifact is None:
+                    artifact=await _finish_thread(write_response,self.data_dir,task_id,row['attempt_count'],[raw],max_bytes=self.response_limit)
+                await self._transition(row,'materializing',reason='remote_success',response_ref=artifact.local_path,
+                    **({'attempt_certainty':'response_received','http_status':200} if row['status']=='submitting' else {}))
+                return artifact
+            await asyncio.sleep(min(3,max(0,remaining)))
+        return None
+
+    async def recover_remote(self, task_id):
+        async with self.task_locks.hold(task_id):
+            row=await self._row(task_id)
+            remote=await self.worker.fetchone('SELECT remote_id FROM remote_tasks WHERE task_id=?',(task_id,))
+            if row['status']!='unknown' or remote is None: raise StateConflict('no recoverable remote task')
+            deadline=_now_ms()+600000
+            async with self.semaphore:
+                artifact=await self._poll_remote(task_id,remote['remote_id'],deadline)
+            if artifact is not None: await self._materialize(task_id,artifact,deadline)
+            return await self._row(task_id)
 
     async def _mark_unknown(self, task_id):
         row = await self._row(task_id)
@@ -192,7 +262,7 @@ class Scheduler:
             await self._transition(row,'recovery_pending',reason='local_failure',error_category='ARTIFACT_UNAVAILABLE')
 
     async def resume(self):
-        rows = await self.worker.run(lambda db: db.execute("SELECT task_id FROM tasks WHERE status IN ('queued','retry_wait') ORDER BY created_at,task_id").fetchall())
+        rows = await self.worker.run(lambda db: db.execute("SELECT t.task_id FROM tasks t LEFT JOIN remote_tasks r ON r.task_id=t.task_id WHERE t.status IN ('queued','retry_wait') OR (t.status IN ('submitting','unknown') AND r.remote_id IS NOT NULL AND t.deadline_at>?) ORDER BY t.created_at,t.task_id",(_now_ms(),)).fetchall())
         for row in rows: self.kick(row[0])
 
     async def close(self, grace_seconds=30):

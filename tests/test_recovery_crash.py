@@ -46,7 +46,7 @@ transition(db,task,1,'materializing',1002,reason='received',response_ref=artifac
 if stage=='after_register': os._exit(73)
 image=(root/'sample.png').read_bytes()
 m=ArtifactMaterializer(root)
-m._publish(task, [(image,'image/png',32,32,None)])
+m._publish(task, [(image,'image/png',32,32,None,None)])
 os._exit(74)
 '''
 

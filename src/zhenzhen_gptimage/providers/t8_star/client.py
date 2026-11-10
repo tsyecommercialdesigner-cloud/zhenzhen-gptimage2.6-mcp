@@ -57,8 +57,10 @@ def _reference_url(data: bytes) -> str:
 
 def build_request(snapshot: RequestSnapshot, references: tuple[bytes, ...] = ()) -> tuple[str, dict]:
     """Build the endpoint and a strict whitelist of provider fields from a frozen snapshot."""
-    if snapshot.channel not in ('images', 'flux', 'chat') or snapshot.resolved_model not in MODELS:
+    if snapshot.provider != 't8-star' or snapshot.channel not in ('images', 'flux', 'chat') or snapshot.resolved_model not in MODELS:
         raise ValueError('invalid channel or model')
+    if snapshot.output_format == 'svg' and snapshot.resolved_model != 'gpt-image-2.6-flare':
+        raise ValueError('SVG is currently limited to the verified base flare model')
     if not snapshot.prompt or len(snapshot.prompt.encode('utf-8')) > 32768:
         raise ValueError('invalid prompt')
     if len(references) != len(snapshot.reference_hashes) or len(references) > 4:
@@ -83,9 +85,14 @@ def build_request(snapshot: RequestSnapshot, references: tuple[bytes, ...] = ())
         ]
         return '/v1/chat/completions', {'model':snapshot.resolved_model,
             'messages':[{'role':'user', 'content':content}], 'stream':False}
-    if snapshot.width is None or snapshot.height is None or not (1 <= snapshot.width <= 4096 and 1 <= snapshot.height <= 4096):
+    if snapshot.size is not None and snapshot.output_format in ('gif','svg'):
+        size = None
+    elif snapshot.width is not None and snapshot.height is not None and 1 <= snapshot.width <= 4096 and 1 <= snapshot.height <= 4096:
+        size = f'{snapshot.width}x{snapshot.height}'
+    else:
         raise ValueError('images and flux require valid dimensions')
-    suffix = '' if max(snapshot.width, snapshot.height) <= 1024 else '-2k' if max(snapshot.width, snapshot.height) <= 2048 else '-4k'
+    edge=max(snapshot.width or 0,snapshot.height or 0)
+    suffix = '' if edge <= 1024 else '-2k' if edge <= 2048 else '-4k'
     if not snapshot.resolved_model.endswith(suffix) or (not suffix and snapshot.resolved_model.endswith(('-2k','-4k'))):
         raise ValueError('snapshot model and dimensions disagree')
     # T8 Star's image endpoint appends the flare 4k suffix based on size.
@@ -93,7 +100,23 @@ def build_request(snapshot: RequestSnapshot, references: tuple[bytes, ...] = ())
     # Keep the internal model unchanged for routing, history and retries.
     wire_model = ('gpt-image-2.6-flare' if snapshot.resolved_model == 'gpt-image-2.6-flare-4k'
                   else snapshot.resolved_model)
-    body = {'model':wire_model, 'prompt':snapshot.prompt, 'size':f'{snapshot.width}x{snapshot.height}'}
+    body = {'model':wire_model, 'prompt':snapshot.prompt}
+    if size is not None:
+        body['size'] = size
+    elif snapshot.size != 'auto':
+        body['aspect_ratio'] = snapshot.size
+    if snapshot.output_format in ('gif','svg'):
+        if references:
+            raise ValueError('reference images are not supported for SVG/GIF')
+        body['output_format'] = snapshot.output_format
+        if snapshot.output_format == 'svg':
+            body['n'] = 1
+            body['svg'] = {'model':snapshot.svg_model or 'gpt-6-luna'}
+            if snapshot.svg_reasoning_effort is not None:
+                body['svg']['reasoning'] = {'effort':snapshot.svg_reasoning_effort}
+        else:
+            if snapshot.frame_count is not None: body['frame_count'] = snapshot.frame_count
+            if snapshot.frame_duration_ms is not None: body['frame_duration_ms'] = snapshot.frame_duration_ms
     if urls:
         body['image'] = urls
     return '/v1/images/generations', body
@@ -170,6 +193,35 @@ def classify_exception(exc: BaseException) -> ProviderError:
         return ProviderError('CONNECT_NOT_SENT', safe_retry=True)
     return ProviderError('SUBMISSION_UNKNOWN')
 
+def parse_async_submission(raw: bytes) -> str:
+    try:
+        body = json.loads(raw)
+        task_id = body['task_id']
+        if not isinstance(task_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', task_id):
+            raise ValueError('invalid task id')
+        return task_id
+    except (ValueError, KeyError, TypeError) as exc:
+        raise ProviderError('SUBMISSION_UNKNOWN') from exc
+
+def parse_async_status(raw: bytes, task_id: str) -> tuple[str, bytes | None]:
+    try:
+        body = json.loads(raw)
+        data = body['data']
+        if not isinstance(data, dict) or data.get('task_id') != task_id:
+            raise ValueError('mismatched task')
+        status = data['status']
+        if status not in ('NOT_START', 'SUBMITTED', 'IN_PROGRESS', 'SUCCESS', 'FAILURE'):
+            raise ValueError('unknown remote status')
+        result = None
+        if status == 'SUCCESS':
+            payload = data['data']
+            if not isinstance(payload, dict): raise ValueError('missing result')
+            result = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+            parse_response('images', result)
+        return status, result
+    except (ValueError, KeyError, TypeError, ProviderError) as exc:
+        raise ProviderError('RESPONSE_INVALID') from exc
+
 class T8StarClient:
     def __init__(self, client: httpx.AsyncClient, api_key: str, *, response_limit: int = MAX_BODY, request_limit: int = MAX_BODY):
         if not api_key.strip() or not 1 <= response_limit <= MAX_BODY or not 1 <= request_limit <= MAX_BODY:
@@ -178,6 +230,43 @@ class T8StarClient:
         self._key = api_key
         self._response_limit = response_limit
         self._request_limit = request_limit
+
+    async def submit_async(self, snapshot: RequestSnapshot, *, remaining_seconds: float) -> str:
+        if snapshot.execution_mode != 'async' or snapshot.output_format != 'gif' or snapshot.channel != 'images' or snapshot.resolved_model != 'gpt-image-2.6-flare':
+            raise ValueError('unsupported async combination')
+        path, body = build_request(snapshot)
+        encoded = json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+        if len(encoded) > self._request_limit: raise ValueError('provider request exceeds configured limit')
+        if remaining_seconds <= 0: raise ProviderError('DEADLINE_EXCEEDED')
+        try:
+            async with asyncio.timeout(remaining_seconds):
+                async with self._client.stream('POST', 'https://ai.t8star.org' + path, params={'async':'true'},
+                    headers={'Authorization':'Bearer ' + self._key, 'Content-Type':'application/json'},
+                    content=encoded, timeout=httpx.Timeout(remaining_seconds), follow_redirects=False) as response:
+                    if response.status_code != 200: raise classify_http_status(response.status_code)
+                    chunks = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        if len(chunks) + len(chunk) > min(self._response_limit, 65536): raise ProviderError('SUBMISSION_UNKNOWN')
+                        chunks.extend(chunk)
+                    return parse_async_submission(bytes(chunks))
+        except ProviderError: raise
+        except (httpx.HTTPError, TimeoutError) as exc: raise classify_exception(exc) from exc
+
+    async def query_async(self, task_id: str, *, remaining_seconds: float) -> tuple[str, bytes | None]:
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', task_id): raise ValueError('invalid task id')
+        if remaining_seconds <= 0: raise ProviderError('DEADLINE_EXCEEDED')
+        try:
+            async with asyncio.timeout(remaining_seconds):
+                async with self._client.stream('GET', 'https://ai.t8star.org/v1/images/tasks/' + task_id,
+                    headers={'Authorization':'Bearer ' + self._key}, timeout=httpx.Timeout(remaining_seconds), follow_redirects=False) as response:
+                    if response.status_code != 200: raise ProviderError('QUERY_UNAVAILABLE', status=response.status_code)
+                    chunks = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        if len(chunks) + len(chunk) > self._response_limit: raise ProviderError('RESPONSE_INVALID')
+                        chunks.extend(chunk)
+                    return parse_async_status(bytes(chunks), task_id)
+        except ProviderError: raise
+        except (httpx.HTTPError, TimeoutError) as exc: raise ProviderError('QUERY_UNAVAILABLE') from exc
 
     async def generate(self, snapshot: RequestSnapshot, references: tuple[bytes, ...] = (), *, remaining_seconds: float) -> bytes:
         """One request only. Returns complete raw response for durable storage before parsing."""

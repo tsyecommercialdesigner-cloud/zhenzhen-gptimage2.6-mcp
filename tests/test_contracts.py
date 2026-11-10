@@ -6,6 +6,7 @@ EXPECTED = {
     'get_capabilities': set(), 'generate_image': {'request'}, 'generate_batch': {'requests'},
     'get_task': {'task_id','idempotency_key'}, 'list_tasks': {'status','batch_id','model','created_from','created_to','limit','cursor'},
     'get_image': {'task_id','image_index','include_preview'}, 'recover_task': {'task_id'},
+    'accept_gif_size': {'task_id','sha256','width','height'},
     'close_task': {'task_id','expected_status','reason'}, 'save_prompt_template': {'code','content','variables','expected_version'},
     'get_prompt_template': {'code'}, 'list_prompt_templates': {'query','limit','cursor'},
     'render_prompt_template': {'code','variables'},

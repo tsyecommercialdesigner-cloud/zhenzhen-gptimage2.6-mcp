@@ -144,3 +144,18 @@ async def test_stream_forwards_chunks_without_internal_retry():
         async def sink(data): chunks.append(data)
         await T8StarClient(client,'test-key').generate_stream(snapshot(),remaining_seconds=3,write_chunk=sink)
     assert chunks==[b'first',b'second'] and len(calls)==1
+def test_new_format_wire_fields():
+    from zhenzhen_gptimage.generation.models import GenerationRequest
+    from zhenzhen_gptimage.generation.snapshot import create_snapshot
+    from zhenzhen_gptimage.providers.t8_star.client import build_request
+    svg=GenerationRequest(idempotency_key='s',family='flare',width=1024,height=1024,prompt='icon',output_format='svg',svg_model='gpt-6-luna')
+    path, body=build_request(create_snapshot(svg,final_prompt='icon',reference_hashes=()))
+    assert path=='/v1/images/generations'
+    assert body['output_format']=='svg' and body['svg']=={'model':'gpt-6-luna'} and body['n']==1
+    gif=GenerationRequest(idempotency_key='g',family='flare',size='auto',prompt='ball',output_format='gif',frame_count=4,frame_duration_ms=120)
+    _, body=build_request(create_snapshot(gif,final_prompt='ball',reference_hashes=()))
+    assert 'size' not in body and 'aspect_ratio' not in body
+    assert body['output_format']=='gif' and body['frame_count']==4 and body['frame_duration_ms']==120
+    ratio=GenerationRequest(idempotency_key='r',family='flare',size='16:9',prompt='ball',output_format='gif')
+    _, body=build_request(create_snapshot(ratio,final_prompt='ball',reference_hashes=()))
+    assert body['aspect_ratio']=='16:9' and 'size' not in body

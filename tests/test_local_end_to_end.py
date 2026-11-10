@@ -92,6 +92,8 @@ async def test_three_channels_full_local_mcp_flow(tmp_path):
             unknown_id=unknown.structuredContent['data']['task_id']
             closed=await client.call_tool_mcp('close_task',{'task_id':unknown_id,'expected_status':'unknown','reason':'reviewed'})
             assert not closed.isError and closed.structuredContent['data']['status']=='closed'
+            not_ready=await client.call_tool_mcp('generate_image',{'request':{'idempotency_key':'optional-provider','family':'flare','provider':'seedance','width':32,'height':32,'prompt':'cup'}})
+            assert not_ready.isError
             assert sum(method=='POST' for method,_ in calls)==4
     finally:
         await scheduler.close(); await materializer.close(); await http_client.aclose(); await db.close()

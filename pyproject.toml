@@ -25,3 +25,4 @@ packages = ["src/zhenzhen_gptimage"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/zhenzhen_gptimage/repository/schema_v1.sql" = "zhenzhen_gptimage/repository/schema_v1.sql"
+"src/zhenzhen_gptimage/repository/schema_v2.sql" = "zhenzhen_gptimage/repository/schema_v2.sql"

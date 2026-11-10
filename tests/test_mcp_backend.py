@@ -90,7 +90,8 @@ async def test_stdio_real_entrypoint_with_local_key(tmp_path):
     script=tmp_path/'server.py'
     script.write_text('import sys\nfrom zhenzhen_gptimage.mcp_api.main import main\nsys.argv=["server","--config-dir",'+repr(str(config))+',"--data-dir",'+repr(str(tmp_path/'data'))+']\nmain()\n',encoding='utf-8')
     async with Client(PythonStdioTransport(script)) as client:
-        assert len(await client.list_tools()) == 12
+        names={tool.name for tool in await client.list_tools()}
+        assert 'accept_gif_size' in names and 'generate_image' in names
         result=await client.call_tool_mcp('list_tasks',{})
         assert not result.isError and result.structuredContent['data']['items']==[]
 
