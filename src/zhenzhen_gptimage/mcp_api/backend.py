@@ -108,6 +108,19 @@ class ServiceBackend:
 
     async def call(self, name, args):
         try:
+            if name == 'get_capabilities':
+                from .server import capabilities
+                return success(capabilities())
+            if name == '__resource__':
+                from .server import capabilities
+                from zhenzhen_gptimage.prompts.guidance import PROMPT_GUIDE, RECOVERY_GUIDE
+                resources = {'gptimage://capabilities': json.dumps(capabilities(), ensure_ascii=False),
+                             'gptimage://prompt-guide': PROMPT_GUIDE,
+                             'gptimage://recovery-guide': RECOVERY_GUIDE}
+                return success(resources[args['uri']])
+            if name == '__prompt__':
+                from zhenzhen_gptimage.prompts.guidance import optimize_ecommerce_prompt
+                return success(optimize_ecommerce_prompt(args['requirement'], args['product_facts'], args['image_purpose']))
             if name == 'generate_image':
                 request=GenerationRequest.model_validate(args['request'])
                 row=await self.generation.generate_image(request)

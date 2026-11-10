@@ -5,7 +5,11 @@ from pathlib import Path
 from zhenzhen_gptimage.bootstrap.config import load_config
 from zhenzhen_gptimage.bootstrap.observability import configure_logging
 from .server import create_server
-from .lifecycle import running_service
+from .shared_backend import shared_backend
+
+async def run_stdio(backend):
+    """Expose a supplied backend over the MCP stdio transport."""
+    await create_server(backend).run_async(transport='stdio',show_banner=False)
 
 def main():
     parser=argparse.ArgumentParser(description='Local image generation MCP server')
@@ -16,8 +20,8 @@ def main():
     config=load_config(args.config_dir,args.data_dir,env_file=args.env_file)
     configure_logging()
     async def run():
-        async with running_service(config) as backend:
-            await create_server(backend).run_async(transport='stdio',show_banner=False)
+        async with shared_backend(config, args.config_dir) as backend:
+            await run_stdio(backend)
     asyncio.run(run())
 
 if __name__ == '__main__': main()

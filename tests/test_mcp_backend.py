@@ -85,15 +85,20 @@ async def test_startup_and_shutdown_without_network(tmp_path):
 @pytest.mark.asyncio
 async def test_stdio_real_entrypoint_with_local_key(tmp_path):
     from fastmcp.client.transports import PythonStdioTransport
+    from zhenzhen_gptimage.mcp_api.backend_control import request_stop
+    from zhenzhen_gptimage.mcp_api.discovery import read_endpoint
     config=tmp_path/'config';config.mkdir()
     (config/'.env').write_text('ZHENZHEN_GPTIMAGEGEN_API_KEY=placeholder\n')
     script=tmp_path/'server.py'
     script.write_text('import sys\nfrom zhenzhen_gptimage.mcp_api.main import main\nsys.argv=["server","--config-dir",'+repr(str(config))+',"--data-dir",'+repr(str(tmp_path/'data'))+']\nmain()\n',encoding='utf-8')
-    async with Client(PythonStdioTransport(script)) as client:
+    async with Client(PythonStdioTransport(script, keep_alive=False)) as client:
         names={tool.name for tool in await client.list_tools()}
         assert 'accept_gif_size' in names and 'generate_image' in names
         result=await client.call_tool_mcp('list_tasks',{})
         assert not result.isError and result.structuredContent['data']['items']==[]
+    endpoint = read_endpoint(tmp_path/'data')
+    assert endpoint is not None
+    assert await request_stop(endpoint, endpoint.identity)
 
 @pytest.mark.asyncio
 async def test_failed_task_queries_succeed_and_generation_failure_retains_id(tmp_path):

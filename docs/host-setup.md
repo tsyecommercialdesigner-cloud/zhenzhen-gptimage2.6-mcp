@@ -1,80 +1,61 @@
 # 本地 stdio MCP 配置
 
-先在项目目录执行 `uv sync --locked`，按 [configuration.md](configuration.md) 设置
-`ZHENZHEN_GPTIMAGEGEN_API_KEY`。本地启动命令（将路径替换为实际绝对路径）：
+以下示例适用于包含共享后台变更的版本，尚需发布版 Desktop 实测；v0.1.1 仍要求每个活动 Server 使用独立数据目录。先完成 [MANUAL 安装与凭据配置](../MANUAL.md#2-项目初始化)，保持现有 Host 条目和认证不变，只合并本服务条目。首次联调前确认配置已应用，并按 Host 要求重启。
 
-```text
-uv run --locked --project E:\mcp-server-workspace\zhenzhen-gptimage2.6-mcp zhenzhen-gptimage --config-dir E:\mcp-server-workspace\zhenzhen-gptimage2.6-mcp --data-dir E:\mcp-server-workspace\zhenzhen-gptimage2.6-mcp\runtime-data
+示例使用 `D:/MCP/zhenzhen-gptimage2.6-mcp` 和别名 `zhenzhen-gptimage2-6`。想共享任务、幂等和模板时，多个 Host 应使用相同的配置目录、密钥及 `--data-dir`；以下示例采用 `runtime-data/shared`。如需隔离历史，改为不同数据目录。入口未指定 `--data-dir` 时使用启动工作目录下的 `runtime-data`，因此建议在 Host 配置中明确指定绝对路径。
+
+## Codex Desktop
+
+将以下内容合并至 Codex 的 MCP 配置，保留其他表：
+
+```toml
+[mcp_servers.zhenzhen-gptimage2-6]
+command = "uv"
+args = ["--directory", "D:/MCP/zhenzhen-gptimage2.6-mcp", "run", "--no-sync", "zhenzhen-gptimage", "--config-dir", "D:/MCP/zhenzhen-gptimage2.6-mcp", "--data-dir", "D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/shared"]
 ```
 
-以下命令会修改相应 Host 的配置，运行前应根据机器实际路径调整。三个 Host 需使用
-不同数据目录，或确保不会同时运行。Claude Code 和 Codex 的命令格式已使用本机 CLI
-在隔离配置目录验证，Claude 的隔离 MCP 健康检查显示 Connected；尚未验证会话内生图。
+## Claude Desktop / Code
 
-## Codex CLI
+在实际 Claude Desktop 使用的配置文件 `mcpServers` 对象中合并此条目，保留其他服务。Claude Code 的配置作用域与 Desktop 不同，按实际使用的客户端分别配置；Cowork 是否可连接须在目标版本实测。
 
-```powershell
-codex mcp add zhenzhen-gptimage -- uv run --locked --project E:/mcp-server-workspace/zhenzhen-gptimage2.6-mcp zhenzhen-gptimage --config-dir E:/mcp-server-workspace/zhenzhen-gptimage2.6-mcp --data-dir E:/mcp-server-workspace/zhenzhen-gptimage2.6-mcp/runtime-data/codex
-codex mcp get zhenzhen-gptimage
+```json
+{
+  "zhenzhen-gptimage2-6": {
+    "command": "uv",
+    "args": ["--directory", "D:/MCP/zhenzhen-gptimage2.6-mcp", "run", "--no-sync", "zhenzhen-gptimage", "--config-dir", "D:/MCP/zhenzhen-gptimage2.6-mcp", "--data-dir", "D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/shared"]
+  }
+}
 ```
-
-`codex mcp get` 显示的是注册内容，不代表已连接或已验证图片显示。另见
-[OpenAI Docs MCP](https://developers.openai.com/learn/docs-mcp)。
-
-## Claude Code
-
-```powershell
-claude mcp add --scope user --transport stdio zhenzhen-gptimage -- uv run --locked --project E:/mcp-server-workspace/zhenzhen-gptimage2.6-mcp zhenzhen-gptimage --config-dir E:/mcp-server-workspace/zhenzhen-gptimage2.6-mcp --data-dir E:/mcp-server-workspace/zhenzhen-gptimage2.6-mcp/runtime-data/claude
-claude mcp get zhenzhen-gptimage
-```
-
-如只希望当前项目使用，可将 `--scope user` 改成 `--scope project`；以当前
-Claude Code 版本的 `claude mcp add --help` 为准。
 
 ## DeepSeek Harness
 
-本机 DSH 0.2.1-rc.5 的 `@deepseek-ai/dsh-mcp-client` 使用 Cordis overlay。示例
-overlay（保存为本地 YAML 文件，路径根据实际调整）：
+针对 DSH Desktop 0.2.1-rc.5，在该服务的 Cordis overlay 合并以下配置，不覆盖其他插件：
 
 ```yaml
 - insert:
-    - id: zhenzhen-gptimage
+    - id: mcp-zhenzhen-gptimage2-6
       name: '@deepseek-ai/dsh-mcp-client'
       config:
-        serverName: zhenzhen_gptimage
+        serverName: zhenzhen-gptimage2-6
         transport: stdio
         command: uv
         env:
           NO_PROXY: "localhost,127.0.0.1,::1"
           no_proxy: "localhost,127.0.0.1,::1"
         args:
+          - --directory
+          - D:/MCP/zhenzhen-gptimage2.6-mcp
           - run
-          - --locked
-          - --project
-          - E:/mcp-server-workspace/zhenzhen-gptimage2.6-mcp
+          - --no-sync
           - zhenzhen-gptimage
           - --config-dir
-          - E:/mcp-server-workspace/zhenzhen-gptimage2.6-mcp
+          - D:/MCP/zhenzhen-gptimage2.6-mcp
           - --data-dir
-          - E:/mcp-server-workspace/zhenzhen-gptimage2.6-mcp/runtime-data/dsh
+          - D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/shared
         toolCallTimeoutMs: 630000
         failOnStartupError: true
 ```
 
-受影响的 DSH Desktop 0.2.1-rc.5 与 httpx 0.28.1 组合可能因继承的 `[::1]` 导致启动报 `Invalid port: ':1]'`。上述 `config.env` 只影响此 MCP 子进程；若原有绕过列表还有其他域名或地址，保留并合并到两个字段，例如两者都写 `localhost,127.0.0.1,::1,example.internal`，移除 `[::1]`。不要覆盖其他服务、代理地址或凭据。合并并重启后检查插件状态、工具发现与调用；隔离验证不等于真实 Desktop 通过。其他版本以实际验证为准。
+受影响版本的 httpx 可能因 `[::1]` 报 `Invalid port: ':1]'`。两个 `config.env` 字段只影响该 MCP 子进程；若原有绕过列表还有其他域名或地址，保留并一致合并，移除 `[::1]`。DSH 可能过滤含 KEY/TOKEN 的环境变量；建议使用项目 `.env`，或按 DSH 实际行为显式配置。重启后检查插件状态、工具发现和实际调用；`--dump-config` 不代表会话验收。630 秒客户端超时不改变服务端 600 秒期限。
 
-以 `dsh headless --patch <overlay绝对路径> --dump-config` 可检查合并后的配置；实际
-使用的 profile 应根据本机安装情况选择。隔离 overlay 的合并已验证，但尚未完成 DSH
-工具调用及图像展示实测。DSH 默认每次工具调用超时为 60 秒，因此示例设置 630 秒，
-以覆盖服务端 600 秒任务期限；它不改变服务端期限。
-
-此 DSH 版本会从子进程环境中剔除包含 KEY/TOKEN 等字样的环境变量，因此建议使用
-项目 `.env`；也可按 DSH 的 `env` 配置显式传入。其文档说明 MCP Prompt 模板不支持，
-图像展示还依赖当前模型与附件功能。stdio 初始协商会启动临时探测进程；它与本项目
-单目录实例锁的实际交互仍需在目标 Host 中验证。
-
-`--config-dir` 用于定位默认 `.env`；如需指定其他文件，可用绝对路径
-`--env-file`。同一 `--data-dir` 只允许一个活动 Server，其他 Host 同时启动并
-使用同目录会收到启动错误。每个 Host 使用独立目录则任务和历史彼此独立。
-Chat Completions 返回尺寸由供应商决定，不支持定制宽高；需要定制时选择
-Generations 或 Flux。调用生成工具将请求远程服务并可能产生费用。
+后台状态、受限权限及有序停止见 [MANUAL 排障](../MANUAL.md#5-启动排障升级与回滚)。图片原件路径以工具返回的 `local_path` 为准，Host 附件可能只是预览副本。生成图片可能收费。

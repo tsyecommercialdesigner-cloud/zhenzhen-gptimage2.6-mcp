@@ -1,5 +1,7 @@
 # 成员使用手册
 
+> 本工作树包含尚未发布的共享后台实现，下文关于共享后台的说明适用于包含该变更的版本；v0.1.1 不具备此能力。发布版及 Desktop 验收状态以 [验收记录](docs/manual-writing-validation.md) 为准。
+
 ## 1. 环境准备
 
 本手册面向使用 MCP 的成员。Windows 默认安装目录为 `D:\MCP\zhenzhen-gptimage2.6-mcp`；其他位置可用，但以下命令和 Host 配置的路径必须一致。需要 Git、uv、Python 3.12.14、可访问 GitHub 和 t8-star 的网络、磁盘空间，以及可登录的目标 Desktop Host。Python 与依赖由项目锁文件约束；uv 需能运行 `uv sync --locked`。请根据实际 Host 安装及模型服务条件配置，Host 对话模型的账号或 codeproxy 与本 MCP 的 t8-star 凭据互不相同。
@@ -38,7 +40,7 @@ uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync zhenzhen-gptimage -
 uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync zhenzhen-gptimage --config-dir D:/MCP/zhenzhen-gptimage2.6-mcp --data-dir D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/codex
 ```
 
-在每个 Host 的 MCP 配置中添加服务时保留已有条目与认证；使用 `command: uv` 和按空格拆分的参数数组，路径含空格时每个路径仍为一个数组项。Claude Desktop 与 DeepSeek Harness Desktop 改用分别独立的 `runtime-data/claude` 和 `runtime-data/dsh`。同一数据目录同时只能由一个 Server 实例使用；不同目录的任务、历史与模板互相隔离。按所用 Host 版本的界面和配置机制合并、启用配置，重启其 MCP 进程或客户端，再分别检查连接、工具发现、会话调用及图片显示；配置成功不等于会话验收成功。已有 CLI 和 DSH overlay 参考见[Host 配置说明](docs/host-setup.md)，该文中的 Claude Code 不等于 Claude Desktop，其旧路径和启动选项需按本节调整。
+在每个 Host 的 MCP 配置中添加服务时保留已有条目与认证；使用 `command: uv` 和按空格拆分的参数数组，路径含空格时每个路径仍为一个数组项。支持共享后台的版本允许多个 stdio 接入进程使用相同 `--data-dir`，共享任务、图片、幂等记录和模板，并由一个后台统一执行队列上限；须同时使用兼容的版本、配置目录、凭据和限制。不同数据目录仍各自隔离。旧版 v0.1.1 的同一数据目录只能有一个 Server 实例；不得与新版后台同时占用同一目录。按所用 Host 版本的界面和配置机制合并、启用配置，重启其 MCP 进程或客户端，再分别检查连接、工具发现、会话调用及图片显示；配置成功不等于会话验收成功。具体示例见[Host 配置说明](docs/host-setup.md)。
 
 以下为通用的 JSON 服务条目示例，具体外层结构和可用性须由对应 Desktop 版本确认；不要用它覆盖整个已有配置：
 
@@ -65,7 +67,16 @@ env:
 
 先检查绝对路径、uv 可执行文件、锁定安装、密钥来源和各 Host 的 stderr；stdio stdout 必须留给协议。配置错误、空密钥和数据目录锁冲突应修正后重启，不能盲目删除数据库。升级前记录旧标签与完整 SHA，检查 `git status`，停止所有使用该数据目录的 Server，保护 `.env`、权限、数据库、图片及私有配置。按[数据库维护](docs/database-maintenance.md)用 SQLite backup API 创建一致性备份，并验证完整性。
 
-Claude Desktop 日志若出现 `data directory is already in use`，先查看 Desktop 和 Claude Code 各自的 MCP 配置与已运行的服务，确认是否有多个实例指向同一 `--data-dir`。保留需要的服务与其他配置：若确需并行运行，为每个实例配置不同的绝对数据目录，例如 `runtime-data/claude-desktop` 与 `runtime-data/claude-code`，并知悉历史与模板不会共享；若属于重复注册，可由使用者移除不需要的注册。修改后完全重启受影响的客户端并检查日志、工具发现与会话调用。不要删除 `server.lock`、数据库或图片来解决占用问题；本机日志证实冲突，但具体配置来源应按客户端实际情况核实。
+共享后台版本可在 PowerShell 中检查或有序停止指定目录的后台；将路径替换为该 Host 的实际配置：
+
+```powershell
+uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync python -m zhenzhen_gptimage.mcp_api.backend_control status --config-dir D:/MCP/zhenzhen-gptimage2.6-mcp --data-dir D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/codex
+uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync python -m zhenzhen_gptimage.mcp_api.backend_control stop --config-dir D:/MCP/zhenzhen-gptimage2.6-mcp --data-dir D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/codex
+```
+
+`status` 的 `ready` 表示后台握手成功；`not_available` 表示没有可连接后台，`incompatible` 表示正在运行的后台与当前配置或版本不兼容。`stop` 表示已请求有序停止，等待在途任务的宽限期最多 30 秒，状态持久化与资源关闭可能继续。停止所有接入客户端后再检查数据目录已释放，才能升级或回滚。若后台不可用，检查配置、私有运行目录权限和旧版进程占用；不要删除 `server.lock`、数据库或图片。旧版 v0.1.1 不支持此管理命令；其目录锁冲突需停止占用进程，或使用不同数据目录并接受历史隔离。
+
+后台发现信息位于数据目录 `.shared-backend/`，只允许当前用户访问：Windows 需要受限 ACL，POSIX 系统需要目录模式 `0700` 和文件模式 `0600`。Windows 后台通过本机 WMI 隐藏启动，WMI 不可用或权限不足时会报启动错误；需要凭据及代理的环境变量经本机内存传递，密钥不会写入启动参数。权限不符合要求时服务会拒绝使用，不要放宽权限。修改密钥、配置目录或版本后，如提示不兼容，先停止旧接入与后台，再使用新配置启动；不要复制或公开发现文件中的令牌。
 
 核实目标 Release 的标签和 SHA 后，在干净工作树切换到该版本，执行 `uv sync --locked --no-dev`，重新执行本节及第 3、4 节检查。回滚前保存升级后的数据库和图片；schema v2 不能由旧版 v1 程序直接打开。回滚必须恢复并验证迁移前的 v1 备份，旧备份不会包含升级后的任务。不要将切换代码等同于回滚数据；无兼容备份时停止并保留原件。
 
@@ -109,7 +120,7 @@ SVG/GIF 仅文生图：通过 `output_format` 指定，`size` 支持 `auto`、�
 - **没有标签或 Release？** 等待经核实的发布；不要把工作树的包版本当标签。
 - **入口找不到或锁不一致？** 确认 uv、Python 3.12.14 和实际目录，重新运行 `uv sync --locked --no-dev`，检查报错，不修改锁文件来掩盖问题。
 - **明明设置了用户级密钥仍报错？** 检查更高优先级 `.env` 和进程变量是否已定义为空或非法；修正或删除对应字段，然后重启。切勿输出密钥。
-- **Host 没有工具？** 分别检查配置格式、MCP 进程 stderr、`--config-dir`、独立数据目录及 Host 是否重新加载；配置存在不代表连接或调用成功。
+- **Host 没有工具？** 分别检查配置格式、MCP 进程 stderr、`--config-dir`、数据目录权限及 Host 是否重新加载；共享后台版本可先使用第 5 节的 `status`。配置存在不代表连接或调用成功。
 - **图片尺寸与请求不同？** Chat 无法定制；GIF 请查看实际尺寸和待确认状态，不要重新生成。参考 [SVG 和 GIF](docs/svg-gif.md)。
 - **调用超时或结果未知？** 使用原任务 ID / 幂等键查询，按允许操作恢复；必要时参阅[恢复说明](docs/recovery.md)，不要直接重复提交。
 - **升级后旧版无法启动？** 检查数据库 schema 及备份，不要删除 v2 数据；按第 5 节恢复经验证的兼容备份。

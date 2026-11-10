@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from zhenzhen_gptimage.generation.contracts import TOOL_INPUTS
 from zhenzhen_gptimage.generation.models import GenerationRequest, MODELS
 from zhenzhen_gptimage.prompts.guidance import PROMPT_GUIDE, RECOVERY_GUIDE, optimize_ecommerce_prompt
+from .local_ipc import IPCOutcomeUnknown
 
 
 class Backend(Protocol):
@@ -62,7 +63,7 @@ def create_server(backend: Backend | None = None) -> FastMCP:
             validated = TOOL_INPUTS[name].model_validate(args)
         except ValidationError:
             return ProtocolResult(_failure('INVALID_ARGUMENT', '参数校验失败', '检查工具参数'))
-        if name == 'get_capabilities':
+        if name == 'get_capabilities' and backend is None:
             return ProtocolResult({'ok': True, 'data': capabilities(), 'warnings': [], 'error': None})
         if backend is None:
             return ProtocolResult(_failure('CONFIG_ERROR', '服务功能尚未接入', '完成服务组装后重试'))
@@ -79,6 +80,8 @@ def create_server(backend: Backend | None = None) -> FastMCP:
                 warning = 'Chat Completions 生成图像的尺寸由供应商决定，无法定制'
                 if warning not in result['warnings']: result['warnings'].append(warning)
             return ProtocolResult(result)
+        except IPCOutcomeUnknown:
+            return ProtocolResult(_failure('SUBMISSION_UNKNOWN', '调用结果未知', '使用原任务 ID 或幂等键查询；不要重复提交'))
         except Exception:
             return ProtocolResult(_failure('PERSISTENCE_ERROR', '服务执行失败', '检查本地日志和任务状态'))
 
@@ -130,11 +133,31 @@ def create_server(backend: Backend | None = None) -> FastMCP:
     for name, tool in registered.items():
         tool.parameters = TOOL_INPUTS[name].model_json_schema()
 
+    async def resource_value(uri, default):
+        if backend is None:
+            return default
+        result = await backend.call('__resource__', {'uri': uri})
+        if not result.get('ok') or not isinstance(result.get('data'), str):
+            raise RuntimeError('resource unavailable')
+        return result['data']
+
     @app.resource('gptimage://capabilities')
-    def capability_resource() -> str: return json.dumps(capabilities(), ensure_ascii=False)
+    async def capability_resource() -> str:
+        return await resource_value('gptimage://capabilities', json.dumps(capabilities(), ensure_ascii=False))
     @app.resource('gptimage://prompt-guide')
-    def prompt_guide() -> str: return PROMPT_GUIDE
+    async def prompt_guide() -> str:
+        return await resource_value('gptimage://prompt-guide', PROMPT_GUIDE)
     @app.resource('gptimage://recovery-guide')
-    def recovery_guide() -> str: return RECOVERY_GUIDE
-    app.prompt(name='optimize_ecommerce_prompt')(optimize_ecommerce_prompt)
+    async def recovery_guide() -> str:
+        return await resource_value('gptimage://recovery-guide', RECOVERY_GUIDE)
+
+    @app.prompt(name='optimize_ecommerce_prompt')
+    async def prompt(requirement: str, product_facts: str, image_purpose: str) -> str:
+        if backend is None:
+            return optimize_ecommerce_prompt(requirement, product_facts, image_purpose)
+        result = await backend.call('__prompt__', {'requirement': requirement,
+                                    'product_facts': product_facts, 'image_purpose': image_purpose})
+        if not result.get('ok') or not isinstance(result.get('data'), str):
+            raise RuntimeError('prompt unavailable')
+        return result['data']
     return app
