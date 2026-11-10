@@ -57,6 +57,11 @@ class ImageView(Contract):
     width: int = Field(ge=1)
     height: int = Field(ge=1)
     available: bool
+    metadata: dict | None = None
+
+class RemoteTaskView(Contract):
+    remote_id: str
+    remote_status: str | None
 
 class TaskView(Contract):
     task_id: str
@@ -73,6 +78,7 @@ class TaskView(Contract):
     images: list[ImageView]
     error_category: str | None = None
     allowed_actions: list[str]
+    remote_task: RemoteTaskView | None = None
 
 class BatchItem(Contract):
     input_index: int = Field(ge=0, le=19)
@@ -123,6 +129,7 @@ class Capabilities(Contract):
     limits: dict
     channels: dict
     evidence: dict
+    formats: dict = Field(default_factory=dict)
 
 class EmptyInput(Contract): pass
 class GenerateInput(Contract): request: GenerationRequest
@@ -148,6 +155,11 @@ class ImageInput(Contract):
     image_index: int = Field(default=0, ge=0, le=3)
     include_preview: bool = True
 class TaskInput(Contract): task_id: str
+class AcceptGifSizeInput(Contract):
+    task_id: str
+    sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
 class CloseInput(Contract):
     task_id: str
     expected_status: Literal['unknown','recovery_pending']
@@ -172,6 +184,7 @@ TOOL_INPUTS = {
     'get_capabilities': EmptyInput, 'generate_image': GenerateInput, 'generate_batch': BatchInput,
     'get_task': TaskLookupInput, 'list_tasks': TaskListInput, 'get_image': ImageInput,
     'recover_task': TaskInput, 'close_task': CloseInput, 'save_prompt_template': SaveTemplateInput,
+    'accept_gif_size': AcceptGifSizeInput,
     'get_prompt_template': TemplateInput, 'list_prompt_templates': TemplateListInput,
     'render_prompt_template': RenderTemplateInput,
 }

@@ -19,10 +19,11 @@ async def _finish_thread(func, *args, **kwargs):
         raise
 
 class Admission:
-    def __init__(self, worker, data_dir: Path, limits: Limits = Limits()):
+    def __init__(self, worker, data_dir: Path, limits: Limits = Limits(), *, formats_enabled: bool = True):
         self.worker = worker
         self.data_dir = data_dir
         self.limits = limits
+        self.formats_enabled = formats_enabled
         self.lock = asyncio.Lock()
         self._stopping = False
 
@@ -49,6 +50,10 @@ class Admission:
             seen = {}
             try:
                 for request in requests:
+                    # Do not dispatch a new format through the old static-only
+                    # provider/materializer while that pipeline is unfinished.
+                    if request.provider != 't8-star' or (request.output_format is not None and not self.formats_enabled):
+                        raise ValueError('selected provider or output format is not yet available')
                     digest = input_digest(request)
                     key = request.idempotency_key
                     if key in seen:

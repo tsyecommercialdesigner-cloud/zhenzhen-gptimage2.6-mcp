@@ -61,6 +61,7 @@ async def running_service(config):
         locks=TaskLocks()
         recovery=RecoveryService(worker,materializer,config.data_dir,locks)
         scheduler=Scheduler(worker,provider,config.data_dir,materializer,concurrency=config.limits.max_concurrency,response_limit=config.limits.response_bytes,task_locks=locks)
+        recovery.scheduler=scheduler
         admission=Admission(worker,config.data_dir,config.limits)
         # No task is scheduled until interrupted operations are classified.
         await recovery.startup()

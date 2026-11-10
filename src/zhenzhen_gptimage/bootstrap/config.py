@@ -59,37 +59,54 @@ class RuntimeConfig(BaseModel):
 KEY_NAME = "ZHENZHEN_GPTIMAGEGEN_API_KEY"
 
 def _user_key() -> str | None:
+    return _user_env(KEY_NAME)
+
+def _user_env(name: str) -> str | None:
     if os.name != "nt":
         return None
     import winreg
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
-            value, _ = winreg.QueryValueEx(key, KEY_NAME)
-            return value if isinstance(value, str) else None
+            value, _ = winreg.QueryValueEx(key, name)
+            return value
     except FileNotFoundError:
         return None
 
 def load_config(config_dir: Path, data_dir: Path, *, env_file: Path | None = None,
                 environ: Mapping[str, str] | None = None,
-                user_key: str | None = None, limits: Limits | None = None) -> RuntimeConfig:
+                user_key: str | None = None,
+                limits: Limits | None = None) -> RuntimeConfig:
     """Load the explicitly located file without modifying the process environment."""
     config_dir = config_dir.resolve()
     if env_file is not None and not env_file.is_absolute():
         raise ValueError("env_file must be absolute")
     path = env_file if env_file is not None else config_dir / '.env'
-    values: dict[str, str | None] = {}
-    if path.exists():
+    missing = object()
+    file_value: object = missing
+    try:
         with path.open(encoding='utf-8-sig') as stream:
             for binding in parse_stream(stream):
                 if binding.error:
                     raise ValueError(f"Invalid .env syntax at line {binding.original.line}")
-                if binding.key is not None:
-                    values[binding.key] = binding.value
+                if binding.key == KEY_NAME:
+                    if file_value is not missing:
+                        raise ValueError(f"Duplicate {KEY_NAME} in .env")
+                    file_value = binding.value
+    except FileNotFoundError:
+        if path.is_symlink():
+            raise ValueError('Unable to read or decode .env') from None
+    except (OSError, UnicodeError):
+        raise ValueError('Unable to read or decode .env') from None
     process = os.environ if environ is None else environ
-    candidates = [('dotenv', values.get(KEY_NAME)), ('process', process.get(KEY_NAME)),
-                  ('user', _user_key() if user_key is None else user_key)]
-    for source, value in candidates:
-        if value and value.strip():
-            return RuntimeConfig(env_file=path, data_dir=data_dir.resolve(), api_key=value.strip(),
-                                 secret_source=source, limits=limits or Limits())
-    raise ValueError(f"Missing {KEY_NAME}")
+    if file_value is not missing:
+        source, value = 'dotenv', file_value
+    elif KEY_NAME in process:
+        source, value = 'process', process[KEY_NAME]
+    else:
+        source, value = 'user', _user_key() if user_key is None else user_key
+        if value is None:
+            raise ValueError(f"Missing {KEY_NAME}")
+    if not isinstance(value, str) or not value.strip() or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise ValueError(f"Invalid {KEY_NAME} in {source}")
+    return RuntimeConfig(env_file=path, data_dir=data_dir.resolve(), api_key=value.strip(),
+                         secret_source=source, limits=limits or Limits())

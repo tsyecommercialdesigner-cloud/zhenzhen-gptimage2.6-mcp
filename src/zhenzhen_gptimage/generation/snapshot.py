@@ -11,7 +11,13 @@ def _digest(value: object) -> str:
 
 def input_digest(request: GenerationRequest) -> str:
     # The key identifies the operation and is deliberately not part of its input.
-    return _digest(request.model_dump(exclude={'idempotency_key'}, mode='json'))
+    data = request.model_dump(exclude={'idempotency_key'}, mode='json')
+    if request.execution_mode == 'sync':
+        data.pop('execution_mode')
+    if request.output_format is None and request.provider == 't8-star':
+        for name in ('provider','output_format','size','size_policy','frame_count','frame_duration_ms','svg_model','svg_reasoning_effort'):
+            data.pop(name)
+    return _digest(data)
 
 class RequestSnapshot(BaseModel):
     model_config = ConfigDict(extra='forbid', frozen=True)
@@ -25,6 +31,16 @@ class RequestSnapshot(BaseModel):
     template_code: str | None = None
     template_version: int | None = None
     reference_hashes: tuple[str, ...]
+    snapshot_version: int = 1
+    provider: str = 't8-star'
+    execution_mode: str = 'sync'
+    output_format: str | None = None
+    size: str | None = None
+    size_policy: str = 'strict'
+    frame_count: int | None = None
+    frame_duration_ms: int | None = None
+    svg_model: str | None = None
+    svg_reasoning_effort: str | None = None
 
 def create_snapshot(request: GenerationRequest, *, final_prompt: str, reference_hashes: tuple[str, ...],
                     template_version: int | None = None) -> RequestSnapshot:
@@ -40,9 +56,17 @@ def create_snapshot(request: GenerationRequest, *, final_prompt: str, reference_
                 'width':request.width, 'height':request.height, 'prompt':final_prompt,
                 'template_code':request.template_code, 'template_version':template_version,
                 'reference_hashes':reference_hashes}
+    if request.output_format is not None or request.provider != 't8-star':
+        resolved.update({'provider':request.provider, 'snapshot_version':2,
+                         'output_format':request.output_format,'size':request.size,
+                         'size_policy':request.size_policy,'frame_count':request.frame_count,
+                         'frame_duration_ms':request.frame_duration_ms,'svg_model':request.svg_model or ('gpt-6-luna' if request.output_format=='svg' else None),
+                         'svg_reasoning_effort':request.svg_reasoning_effort})
+    if request.execution_mode == 'async':
+        resolved['execution_mode'] = 'async'
     return RequestSnapshot(
         input_digest=input_digest(request), resolved_digest=_digest(resolved),
-        **{k: v for k, v in resolved.items() if k != 'provider'})
+        **resolved)
 
 class IdempotencyConflict(ValueError):
     """An existing key was used for different caller input."""

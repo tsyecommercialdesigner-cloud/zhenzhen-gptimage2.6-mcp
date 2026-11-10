@@ -24,8 +24,16 @@
 - **WHEN** recover_task 处理具备可靠响应的任务
 - **THEN** 只执行本地恢复流程，生成 attempt_count 不增加
 
+#### Scenario: 提交结果未知
+- **WHEN** 同步提交可能已送达但结果未知
+- **THEN** 标记 unknown，不自动重发或换通道
+
+#### Scenario: 异步远程 ID 已持久化后重启
+- **WHEN** GIF 异步任务已持久化远程任务 ID，进程中断并重启
+- **THEN** 查询同一远程任务并恢复结果处理，不重新提交生成
+
 ### Requirement: 显式结案
-系统 SHALL 允许 unknown/recovery_pending 按 expected_status 显式结案，记录原因并释放容量；并发状态冲突报错，重复结案不重复释放容量。
+系统 SHALL 允许 unknown/recovery_pending 按 expected_status 显式结案，记录原因并释放队列容量；已知远程任务未达终态时拒绝结案，并对远程终态不明的异步提交继续保守限制生成并发。并发状态冲突报错，重复结案不重复释放容量。
 
 #### Scenario: 重复结案
 - **WHEN** 已 closed 任务再次收到结案请求

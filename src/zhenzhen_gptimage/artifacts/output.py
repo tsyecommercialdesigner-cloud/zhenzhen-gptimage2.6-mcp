@@ -16,6 +16,7 @@ from PIL import Image, UnidentifiedImageError
 from zhenzhen_gptimage.bootstrap.config import Limits
 from zhenzhen_gptimage.providers.t8_star.client import parse_response
 from .storage import ResourceLimitError, _directory
+from .formats import inspect_svg, inspect_gif
 
 
 class ImageResultError(ValueError):
@@ -40,6 +41,7 @@ class PublishedImage:
     width: int
     height: int
     revised_prompt: str | None
+    metadata: dict | None = None
 
 
 def _safe_url(url: str) -> str:
@@ -126,12 +128,18 @@ class ArtifactMaterializer:
         raise ImageResultError('too many redirects')
 
     async def materialize(self, task_id: str, raw_response: bytes, *, channel: str,
-                          expected_size: tuple[int, int] | None, deadline: float) -> list[PublishedImage]:
+                          expected_size: tuple[int, int] | None, deadline: float,
+                          expected_format: str | None = None, accept_actual_size: bool = False,
+                          expected_ratio: tuple[int, int] | None = None,
+                          expected_frame_count: int | None = None,
+                          expected_frame_duration_ms: int | None = None) -> list[PublishedImage]:
         if not re.fullmatch(r'[0-9a-fA-F-]{1,64}', task_id):
             raise ValueError('invalid task id')
         if channel not in ('images', 'flux', 'chat'):
             raise ValueError('invalid channel')
-        if (channel == 'chat') != (expected_size is None):
+        if expected_format not in (None,'gif','svg'):
+            raise ValueError('invalid expected format')
+        if expected_format is None and (channel == 'chat') != (expected_size is None):
             raise ValueError('expected size must be provided only for images/flux')
         async with asyncio.timeout_at(deadline):
             parsed = parse_response(channel, raw_response)
@@ -154,10 +162,23 @@ class ArtifactMaterializer:
                 if total > self.limits.output_total_bytes:
                     raise ResourceLimitError('total image size exceeded')
                 async with self._decode:
-                    mime, width, height = await asyncio.to_thread(_inspect, data, self.limits)
+                    if expected_format:
+                        try:
+                            width, height, metadata = await asyncio.to_thread(inspect_gif if expected_format == 'gif' else inspect_svg, data)
+                        except (ValueError, OSError) as exc:
+                            raise ImageResultError('invalid requested image format') from exc
+                        mime = 'image/gif' if expected_format == 'gif' else 'image/svg+xml'
+                        if expected_format == 'gif' and ((expected_frame_count is not None and metadata['frame_count'] != expected_frame_count)
+                            or (expected_frame_duration_ms is not None and any(d != expected_frame_duration_ms for d in metadata['durations_ms']))):
+                            raise ImageResultError('GIF frame count or duration differs from request')
+                    else:
+                        mime, width, height = await asyncio.to_thread(_inspect, data, self.limits)
+                        metadata = None
                 if expected_size is not None and (width, height) != expected_size:
                     mismatch = True
-                validated.append((data, mime, width, height, image.revised_prompt))
+                if expected_ratio is not None and width*expected_ratio[1] != height*expected_ratio[0]:
+                    mismatch = True
+                validated.append((data, mime, width, height, image.revised_prompt, metadata))
             publication = asyncio.create_task(asyncio.to_thread(self._publish, task_id, validated))
             try:
                 published = await asyncio.shield(publication)
@@ -166,7 +187,7 @@ class ArtifactMaterializer:
                 # while one can still publish files behind the recovery logic.
                 await asyncio.shield(publication)
                 raise
-            if mismatch:
+            if mismatch and not (expected_format == 'gif' and accept_actual_size):
                 raise ImageResultError('generated image dimensions differ from requested size', artifacts=published)
             return published
 
@@ -176,14 +197,14 @@ class ArtifactMaterializer:
         published: list[Path] = []
         result = []
         try:
-            for index, (data, mime, width, height, revised_prompt) in enumerate(validated):
+            for index, (data, mime, width, height, revised_prompt, metadata) in enumerate(validated):
                 temporary = directory / f'.{task_id}.{index}.{uuid4()}.partial'
                 staged.append(temporary)
                 with temporary.open('xb') as file:
                     file.write(data)
                     file.flush()
                     os.fsync(file.fileno())
-                suffix = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp'}[mime]
+                suffix = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'image/gif': '.gif', 'image/svg+xml': '.svg'}[mime]
                 destination = directory / f'{task_id}.{index}{suffix}'
                 # link is atomic and refuses to overwrite; same filesystem.
                 digest = sha256(data).hexdigest()
@@ -206,7 +227,7 @@ class ArtifactMaterializer:
                         raise ImageResultError('existing image content differs')
                 else:
                     published.append(destination)
-                result.append(PublishedImage(index, str(destination), digest, mime, len(data), width, height, revised_prompt))
+                result.append(PublishedImage(index, str(destination), digest, mime, len(data), width, height, revised_prompt, metadata))
             return result
         except BaseException:
             for path in published:

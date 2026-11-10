@@ -43,8 +43,13 @@ def capabilities() -> dict[str, Any]:
             'chat_size': '不可定制，供应商决定实际尺寸'},
             'limits': {'max_concurrency': 6, 'max_unfinished': 20, 'max_attempts': 3},
             'channels': {'images': 'default', 'flux': 'no_reference', 'chat': 'no_custom_size'},
+            'formats': {'svg':'base flare only; original saved; preview may be unavailable',
+                        'gif':'t8-star; original animation saved; preview is a still frame'},
+            'async_generation': 'images channel, base flare GIF only; explicit execution_mode=async',
             'evidence': {'images_png_single_flare': 'verified', 'flux_target_models': 'pending',
-                         'chat_basic': 'reference', 'chat_custom_size': 'blocked'}}
+                         'chat_basic': 'reference', 'chat_custom_size': 'blocked',
+                         'svg_flare_luna_1024': 'provider_verified', 'gif_flare': 'provider_verified',
+                         'other_svg_gif_combinations': 'not_verified'}}
 
 
 def create_server(backend: Backend | None = None) -> FastMCP:
@@ -94,6 +99,8 @@ def create_server(backend: Backend | None = None) -> FastMCP:
     @app.tool
     async def recover_task(task_id: str): return await dispatch('recover_task', locals())
     @app.tool
+    async def accept_gif_size(task_id: str, sha256: str, width: int, height: int): return await dispatch('accept_gif_size', locals())
+    @app.tool
     async def close_task(task_id: str, expected_status: str, reason: str): return await dispatch('close_task', locals())
     @app.tool
     async def save_prompt_template(code: str, content: str, variables: list[dict[str, Any]], expected_version: int | None = None):
@@ -112,6 +119,7 @@ def create_server(backend: Backend | None = None) -> FastMCP:
         'get_capabilities': get_capabilities, 'generate_image': generate_image,
         'generate_batch': generate_batch, 'get_task': get_task, 'list_tasks': list_tasks,
         'get_image': get_image, 'recover_task': recover_task, 'close_task': close_task,
+        'accept_gif_size': accept_gif_size,
         'save_prompt_template': save_prompt_template, 'get_prompt_template': get_prompt_template,
         'list_prompt_templates': list_prompt_templates, 'render_prompt_template': render_prompt_template,
     }

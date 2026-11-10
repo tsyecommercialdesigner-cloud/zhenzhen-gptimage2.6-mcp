@@ -31,20 +31,36 @@ class ServiceBackend:
     async def _task(self, row):
         row = dict(row)
         images = await self.worker.run(lambda db: [dict(r) for r in db.execute('SELECT * FROM image_artifacts WHERE task_id=? ORDER BY image_index',(row['task_id'],))])
+        if row['status']=='recovery_pending' and not images:
+            images=await self.worker.run(lambda db:[dict(r) for r in db.execute('SELECT * FROM pending_image_artifacts WHERE task_id=? ORDER BY image_index',(row['task_id'],))])
         for image in images:
             image.pop('revised_prompt',None); image.pop('created_at',None)
+            pending_metadata=image.pop('metadata_json',None)
+            meta=await self.worker.fetchone('SELECT metadata_json FROM image_format_metadata WHERE task_id=? AND image_index=?',(row['task_id'],image['image_index']))
+            if pending_metadata is not None or meta is not None:
+                image['metadata']=json.loads(pending_metadata if pending_metadata is not None else meta['metadata_json'])
             if self.recovery is not None:
-                current,_=await self.recovery.image(row['task_id'],image['image_index'],False)
-                image['available'] = current['available']
+                if pending_metadata is not None:
+                    from zhenzhen_gptimage.artifacts.recovery import _read_image
+                    import asyncio
+                    image['available'],_=await asyncio.to_thread(_read_image,image,False,1,1)
+                else:
+                    current,_=await self.recovery.image(row['task_id'],image['image_index'],False)
+                    image['available'] = current['available']
             else:
                 from pathlib import Path
                 image['available'] = Path(image['local_path']).is_file()
         actions = {'unknown':['close_task'], 'recovery_pending':['recover_task','close_task'], 'succeeded':['get_image']}.get(row['status'],[])
+        remote=await self.worker.fetchone('SELECT remote_id,remote_status FROM remote_tasks WHERE task_id=?',(row['task_id'],))
+        if remote is not None and row['status']=='unknown': actions=['recover_task','close_task']
+        if row['status']=='recovery_pending' and images and images[0].get('mime_type')=='image/gif':
+            actions = actions + ['accept_gif_size']
         return {'task_id':row['task_id'],'batch_id':row['batch_id'], 'idempotency_key':row['idempotency_key'],
                 'status':row['status'],'resolved_model':row['resolved_model'],'channel':row['channel'],
                 'width':row['width'],'height':row['height'],'created_at':iso(row['created_at']),
                 'deadline_at':iso(row['deadline_at']),'attempt_count':row['attempt_count'],
-                'images':images,'error_category':row['error_category'],'allowed_actions':actions}
+                'images':images,'error_category':row['error_category'],'allowed_actions':actions,
+                'remote_task': dict(remote) if remote is not None else None}
 
     @staticmethod
     def _template(row):
@@ -61,14 +77,20 @@ class ServiceBackend:
         if name == 'close_task':
             row,_=await self.recovery.close(args['task_id'],args['expected_status'],args['reason'])
             return success(await self._task(row))
+        if name == 'accept_gif_size':
+            row=await self.recovery.accept_gif_size(args['task_id'],args['sha256'],args['width'],args['height'])
+            return await self._add_preview(success(await self._task(row)),args['task_id'])
         row, preview=await self.recovery.image(args['task_id'],args.get('image_index',0),args.get('include_preview',True))
         row=dict(row);row.pop('created_at',None);row.pop('revised_prompt',None)
+        meta=await self.worker.fetchone('SELECT metadata_json FROM image_format_metadata WHERE task_id=? AND image_index=?',(args['task_id'],args.get('image_index',0)))
+        if meta is not None: row['metadata']=json.loads(meta['metadata_json'])
         if not row['available']:
             return failure('ARTIFACT_UNAVAILABLE','图片文件不可用','检查本地文件',data=row,task_id=args['task_id'])
         result=success(row)
         if args.get('include_preview',True) and preview is None:
             result['warnings'].append('预览不可用，原图仍可使用')
         if preview is not None: result['_preview']=preview
+        if row['mime_type']=='image/gif' and preview is not None: result['warnings'].append('预览为 GIF 静态首帧，原文件保留动画')
         return result
 
     async def _add_preview(self, result, task_id):
@@ -77,6 +99,7 @@ class ServiceBackend:
             row, preview = await self.recovery.image(task_id,0,True)
             if row['available'] and preview is not None:
                 result['_preview']=preview
+                if row['mime_type']=='image/gif': result['warnings'].append('预览为 GIF 静态首帧，原文件保留动画')
             else:
                 result['warnings'].append('预览不可用，原图仍可使用')
         except (KeyError, OSError, ValueError):
@@ -89,11 +112,20 @@ class ServiceBackend:
                 request=GenerationRequest.model_validate(args['request'])
                 row=await self.generation.generate_image(request)
                 view=await self._task(row)
+                if request.execution_mode=='async' and view['status'] in ('queued','submitting','retry_wait','materializing'):
+                    return success(view)
                 if view['status'] != 'succeeded':
                     code=view['error_category'] or ('DEADLINE_EXCEEDED' if view['status']=='expired' else 'SUBMISSION_UNKNOWN')
                     if code not in {item.value for item in ErrorCode}: code='PROVIDER_REJECTED'
                     return failure(code,'任务未成功完成','查询任务状态',data=view,task_id=view['task_id'])
-                return await self._add_preview(success(view),view['task_id'])
+                result=success(view)
+                if request.output_format=='gif' and view['images']:
+                    width,height=view['images'][0]['width'],view['images'][0]['height']
+                    mismatch=(request.width is not None and (width,height)!=(request.width,request.height))
+                    if request.size and ':' in request.size:
+                        a,b=map(int,request.size.split(':'));mismatch=mismatch or width*b != height*a
+                    if mismatch: result['warnings'].append('GIF 实际尺寸或比例与请求不同，已按用户选择保留实际尺寸')
+                return await self._add_preview(result,view['task_id'])
             if name == 'generate_batch':
                 requests=[GenerationRequest.model_validate(item) for item in args['requests']]
                 batch, rows=await self.generation.generate_batch(requests)
@@ -128,7 +160,7 @@ class ServiceBackend:
                 row=await self.worker.run(get_template,args['code'])
                 if row is None: raise KeyError('template')
                 return success(render_template(row,args['variables']))
-            if name in ('recover_task','close_task','get_image'):
+            if name in ('recover_task','close_task','accept_gif_size','get_image'):
                 if self.recovery is None: return failure('CONFIG_ERROR','恢复功能尚未接入','完成服务组装')
                 return await self._recovery_call(name,args)
             return failure('INVALID_ARGUMENT','未知工具','检查工具名称')
