@@ -7,3 +7,13 @@
 已完成任务的登记响应正文、校验清单和独占参考快照可进入已审查的清理清单；其他任务共享的快照、无法核验的文件和活动任务材料保留。测试覆盖部分失败、实际进程中断前后、清理状态查询，以及原件/关联材料的结果不明时禁止自动重删。SQLite v2 升级到 v3 先备份；隔离升级回滚使用 SQLite 备份恢复并核对原任务、模板和图片。所有删除均为测试创建的合成文件，未删除用户原件，也未发起供应商生图。
 
 候选版本为 0.1.3；发布、安装、三个 Desktop 的实际会话和 Cowork 工作区路径映射仍待验证。完整工作树版本的测试不代替最终合入提交或发布标签的复核。
+
+2026-11-10 发布及安装：PR #4 合并提交 `7b0ae11d47cdf5429991ff0cabec60a6432a1068` 与通过检查的候选代码树一致；该合并提交独立检出的完整测试为 284 通过、1 跳过，OpenSpec 严格校验通过，仓库未配置 CI。[v0.1.3 预发布](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/releases/tag/v0.1.3) 标签指向该提交。确认四个数据目录没有未完成任务后，仅停止旧 MCP 接入及共享后台；将实际安装目录升级到发布标签并以离线锁定依赖安装。升级前用 SQLite backup API 备份四个数据库，记录逻辑内容摘要及 9 个图片、响应和参考快照摘要；升级后重新核对均一致，原 `.env` 不存在。最终备份与脱敏账本保存在 Git 忽略的 `.cache/upgrade-v013-final/`。这些检查发生在新服务首次启动及数据库迁移之前；三个 Desktop 的发布版会话验收仍待用户设置导出根目录并重启。
+
+发布版 Claude Desktop Cowork 验收：配置授权导出根目录并重新启动后，通过实际会话调用 `export_image` 导出既有蓝杯 PNG，成功在 Cowork 的工作区文件查看器中打开。副本本机路径和该会话报告的沙箱路径均为 `D:\MCP-host-tests\zhenzhen-gptimage2.6\assets\generated\cowork-v013-blue-mug.png`；1,114,124 字节，原件与副本 SHA-256 均为 `5b834ee871edbd45c3fb5e309021cf52890ea8a23c72dc6ba49b54f143a2703f`，已另以本机文件哈希独立核对。未重新生成图片；该次验收只覆盖此会话和 PNG，不能推断其他 Cowork 沙箱的路径映射。
+
+发布版 DeepSeek Harness Desktop 验收：在既有工作区会话调用 `export_image`，成功导出并在会话中展示蓝杯图片，副本位于 `D:\MCP-host-tests\zhenzhen-gptimage2.6\assets\generated\dsh-v013-blue-mug.png`；本机独立计算的 SHA-256 与上述原件一致。会话中 `get_retention_policy` 返回 `enabled: false`、`retention_days: 90`，未启用或执行清理，也未重新生成图片。此项验证不代表已完成 Codex Desktop 的导出与共享权限验收。
+
+DSH 补充权限检查：通过同一会话将目标指定为授权根目录外的 `D:\MCP-host-tests\unauthorized-boundary-check.png`，`export_image` 返回 `ARTIFACT_UNAVAILABLE`，独立检查该目标文件不存在；未执行生图或清理。
+
+发布版 Codex Desktop 验收：重新加载 MCP 后，从当前会话调用 `export_image`，将同一既有原件导出至 `D:\MCP-host-tests\zhenzhen-gptimage2.6\assets\generated\codex-v013-blue-mug.png`；工具返回成功，本机文件 SHA-256 与原件一致。`get_retention_policy` 返回 `enabled: false`、`retention_days: 90`；指定授权根目录外的目标时返回 `ARTIFACT_UNAVAILABLE`。三个 Host 使用同一配置数据目录；检查到共享后台是同一条父子进程链，Codex 和 DSH 均读到关闭的策略。此次验证未启用或执行清理，未发起新的生图请求；共享后台的并发及清理授权细节另由隔离自动化测试覆盖。
