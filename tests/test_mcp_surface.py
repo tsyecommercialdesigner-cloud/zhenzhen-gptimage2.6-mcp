@@ -1,3 +1,4 @@
+import json
 import pytest
 from fastmcp import Client
 from zhenzhen_gptimage.mcp_api.server import create_server
@@ -20,7 +21,6 @@ async def test_discovery_and_fail_closed():
         assert not result.isError and result.structuredContent['data']['routing']['priority'] == ['images','flux','chat']
         resources = await client.list_resources()
         assert {str(r.uri) for r in resources} == {'gptimage://capabilities','gptimage://prompt-guide','gptimage://recovery-guide'}
-        import json
         resource = await client.read_resource('gptimage://capabilities')
         assert json.loads(resource[0].text) == result.structuredContent['data']
         assert '尺寸不可定制' in (await client.read_resource('gptimage://prompt-guide'))[0].text
@@ -49,3 +49,26 @@ async def test_stdio_discovery_and_fail_closed(tmp_path):
         assert {tool.name for tool in await client.list_tools()} == set(TOOL_INPUTS)
         response = await client.call_tool_mcp('generate_image', {'request': {'idempotency_key':'a', 'family':'flare', 'prompt':'mug', 'width':1024, 'height':1024}})
         assert response.isError and response.structuredContent['error']['code'] == 'CONFIG_ERROR'
+
+@pytest.mark.asyncio
+async def test_text_only_hosts_receive_full_results_and_image_preview():
+    class Backend:
+        async def call(self, name, args):
+            return {'ok': True, 'data': {'task_id': 't', 'images': [{'local_path': 'D:/图片/原件.png'}]},
+                    'warnings': [], 'error': None, '_preview': b'preview-bytes'}
+    async with Client(create_server(Backend())) as client:
+        result = await client.call_tool_mcp('get_image', {'task_id': 't'})
+        assert json.loads(result.content[0].text) == result.structuredContent
+        assert result.structuredContent['data']['images'][0]['local_path'] == 'D:/图片/原件.png'
+        assert '_preview' not in result.content[0].text
+        assert result.content[1].type == 'image' and not result.isError
+    async with Client(create_server()) as client:
+        failure = await client.call_tool_mcp('get_task', {'task_id': 't'})
+        assert failure.isError
+        assert json.loads(failure.content[0].text) == failure.structuredContent
+    class BrokenBackend:
+        async def call(self, name, args):
+            raise RuntimeError('sensitive-test-token')
+    async with Client(create_server(BrokenBackend())) as client:
+        failure = await client.call_tool_mcp('get_task', {'task_id': 't'})
+        assert failure.isError and 'sensitive-test-token' not in failure.content[0].text

@@ -4,7 +4,7 @@
 
 本手册面向使用 MCP 的成员。Windows 默认安装目录为 `D:\MCP\zhenzhen-gptimage2.6-mcp`；其他位置可用，但以下命令和 Host 配置的路径必须一致。需要 Git、uv、Python 3.12.14、可访问 GitHub 和 t8-star 的网络、磁盘空间，以及可登录的目标 Desktop Host。Python 与依赖由项目锁文件约束；uv 需能运行 `uv sync --locked`。请根据实际 Host 安装及模型服务条件配置，Host 对话模型的账号或 codeproxy 与本 MCP 的 t8-star 凭据互不相同。
 
-仓库：[zhenzhen-gptimage2.6-mcp](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp)；发行包名 `zhenzhen-gptimage2-6-mcp`，Python 模块 `zhenzhen_gptimage`，可执行入口 `zhenzhen-gptimage`，MCP 服务名 `zhenzhen-gptimage-2.6`，传输方式为 stdio。包版本声明为 0.1.0；发行标签与完整提交 SHA 请以 Release 页面为准，并在安装时核对。此前隔离工作树锁定安装解析出 FastMCP 2.14.7 和 MCP Python SDK 1.30.0；具体版本以目标 Release 锁文件为准，协议协商版本与包版本分别确定。
+仓库：[zhenzhen-gptimage2.6-mcp](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp)；发行包名 `zhenzhen-gptimage2-6-mcp`，Python 模块 `zhenzhen_gptimage`，可执行入口 `zhenzhen-gptimage`，MCP 服务名 `zhenzhen-gptimage-2.6`，传输方式为 stdio。[v0.1.0 预发布](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/releases/tag/v0.1.0) 对应提交 `7d60bde04479c51deba4a82aa3084e7ea1a0fd72`；安装时仍需自行核对标签与 SHA。隔离锁定安装解析出 FastMCP 2.14.7 和 MCP Python SDK 1.30.0；具体版本以目标 Release 锁文件为准，协议协商版本与包版本分别确定。
 
 ## 2. 项目初始化
 
@@ -49,11 +49,23 @@ uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync zhenzhen-gptimage -
 }
 ```
 
-验收记录见[本次手册验收](docs/manual-writing-validation.md)和[Host 会话验证](docs/host-session-validation.md)。当前 Codex Desktop 曾观察到本项目图片内容块；Claude Desktop 和 DeepSeek Harness Desktop 对本项目的完整实际会话与图片展示尚未完成验证。各 Host 的 UI、版本及模型渠道以实际验收为准，不能用其他客户端代替。
+验收记录见[本次手册验收](docs/manual-writing-validation.md)和[Host 会话验证](docs/host-session-validation.md)。当前 Codex Desktop 曾观察到本项目图片内容块；Claude Desktop 和 DeepSeek Harness Desktop 对本项目的完整实际会话与图片展示尚未完成验证。DSH Desktop 已发现并调用 `get_capabilities`，但会话仅收到“完成”，能力数据未见返回；原因尚待核实。各 Host 的 UI、版本及模型渠道以实际验收为准，不能用其他客户端代替。
+
+对于受影响的 DeepSeek Harness Desktop 0.2.1-rc.5 与 httpx 0.28.1 组合，在此 MCP 服务的 `config` 下合并以下字段：
+
+```yaml
+env:
+  NO_PROXY: "localhost,127.0.0.1,::1"
+  no_proxy: "localhost,127.0.0.1,::1"
+```
+
+若已有其他绕过地址，将其保留并一致地追加到两个字段，移除 `[::1]`；不要覆盖其他服务、代理地址或凭据。这只影响该 MCP 子进程。重启后检查插件状态与 `get_capabilities`；当前隔离验证不能代替真实 Desktop 复测，其他版本以实际验证为准。完整配置层级见 [DSH overlay 示例](docs/host-setup.md#deepseek-harness)。
 
 ## 5. 启动排障、升级与回滚
 
 先检查绝对路径、uv 可执行文件、锁定安装、密钥来源和各 Host 的 stderr；stdio stdout 必须留给协议。配置错误、空密钥和数据目录锁冲突应修正后重启，不能盲目删除数据库。升级前记录旧标签与完整 SHA，检查 `git status`，停止所有使用该数据目录的 Server，保护 `.env`、权限、数据库、图片及私有配置。按[数据库维护](docs/database-maintenance.md)用 SQLite backup API 创建一致性备份，并验证完整性。
+
+Claude Desktop 日志若出现 `data directory is already in use`，先查看 Desktop 和 Claude Code 各自的 MCP 配置与已运行的服务，确认是否有多个实例指向同一 `--data-dir`。保留需要的服务与其他配置：若确需并行运行，为每个实例配置不同的绝对数据目录，例如 `runtime-data/claude-desktop` 与 `runtime-data/claude-code`，并知悉历史与模板不会共享；若属于重复注册，可由使用者移除不需要的注册。修改后完全重启受影响的客户端并检查日志、工具发现与会话调用。不要删除 `server.lock`、数据库或图片来解决占用问题；本机日志证实冲突，但具体配置来源应按客户端实际情况核实。
 
 核实目标 Release 的标签和 SHA 后，在干净工作树切换到该版本，执行 `uv sync --locked --no-dev`，重新执行本节及第 3、4 节检查。回滚前保存升级后的数据库和图片；schema v2 不能由旧版 v1 程序直接打开。回滚必须恢复并验证迁移前的 v1 备份，旧备份不会包含升级后的任务。不要将切换代码等同于回滚数据；无兼容备份时停止并保留原件。
 
@@ -64,6 +76,8 @@ uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync zhenzhen-gptimage -
 ## 7. 资源清单
 
 实际可发现的工具如下，结果统一包含 `ok`、`data`、`warnings`、`error`；失败时检查 `error.code`、`message`、`retryable` 和 `next_action`。Host 可通过工具 Schema 查看完整参数和约束。
+
+正在实施的 Desktop 兼容修复会在工具文本内容中提供与结构化结果一致的 JSON，便于仅读取文本的 Host 获取任务状态和 `local_path`；图片附件或预览副本不是原件。该修复尚未发布，成员请以安装版本和[验收记录](docs/manual-writing-validation.md)为准。
 
 | 工具 | 用途与主要参数 |
 | --- | --- |
