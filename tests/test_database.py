@@ -6,12 +6,12 @@ from zhenzhen_gptimage.repository.database import connect, initialize, schema, b
 def test_initialize_and_constraints(tmp_path):
     db = connect(tmp_path / 'state.db')
     initialize(db)
-    assert db.execute('pragma user_version').fetchone()[0] == 2
+    assert db.execute('pragma user_version').fetchone()[0] == 3
     assert db.execute('pragma foreign_keys').fetchone()[0] == 1
     assert db.execute('pragma journal_mode').fetchone()[0] == 'wal'
     assert db.execute('pragma synchronous').fetchone()[0] == 2
     assert db.execute('pragma busy_timeout').fetchone()[0] == 5000
-    assert len(db.execute("select name from sqlite_master where type='table'").fetchall()) == 15
+    assert len(db.execute("select name from sqlite_master where type='table'").fetchall()) == 19
     assert all(row[0] == 64 for row in db.execute('select length(checksum) from schema_migrations'))
     initialize(db)
     args=('t','key','images','flare',1024,1024,'gpt-image-2.6-flare','a'*64,'b'*64,'{}','queued',0,0,600000)
@@ -70,7 +70,7 @@ def test_upgrade_v1_keeps_data_and_creates_readable_backup(tmp_path):
     db.execute("INSERT INTO tasks(task_id,idempotency_key,channel,family,width,height,resolved_model,input_digest,resolved_digest,snapshot_json,status,created_at,updated_at,deadline_at) VALUES ('t','key','images','flare',1024,1024,'gpt-image-2.6-flare',?,?,'{}','unknown',1,1,600001)",('a'*64,'b'*64))
     db.execute("INSERT INTO task_events(task_id,from_status,to_status,reason_code,created_at) VALUES ('t',NULL,'unknown','test',1)")
     initialize(db)
-    assert db.execute('pragma user_version').fetchone()[0] == 2
+    assert db.execute('pragma user_version').fetchone()[0] == 3
     assert db.execute("select input_digest from tasks where task_id='t'").fetchone()[0] == 'a'*64
     assert db.execute("select content from prompt_templates where code='sku'").fetchone()[0] == 'A cup'
     assert db.execute("select task_id from task_events").fetchone()[0] == 't'

@@ -57,6 +57,8 @@ class ImageView(Contract):
     width: int = Field(ge=1)
     height: int = Field(ge=1)
     available: bool
+    cleaned: bool = False
+    cleanup_uncertain: bool = False
     metadata: dict | None = None
 
 class RemoteTaskView(Contract):
@@ -154,6 +156,22 @@ class ImageInput(Contract):
     task_id: str
     image_index: int = Field(default=0, ge=0, le=3)
     include_preview: bool = True
+class ExportImageInput(Contract):
+    task_id: str = Field(min_length=1, max_length=128)
+    image_index: int = Field(default=0, ge=0, le=3)
+    destination: str = Field(min_length=1, max_length=4096)
+class PreviewCleanupInput(Contract):
+    before: str | None = None
+    keep_latest: int | None = Field(default=None, ge=0, le=1_000_000)
+    @model_validator(mode='after')
+    def one_filter(self):
+        if (self.before is None) == (self.keep_latest is None):
+            raise ValueError('exactly one cleanup filter required')
+        return self
+class ExecuteCleanupInput(Contract):
+    plan_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+class SetRetentionPolicyInput(Contract):
+    enabled: bool
 class TaskInput(Contract): task_id: str
 class AcceptGifSizeInput(Contract):
     task_id: str
@@ -183,6 +201,11 @@ class RenderTemplateInput(TemplateInput): variables: dict[str, str]
 TOOL_INPUTS = {
     'get_capabilities': EmptyInput, 'generate_image': GenerateInput, 'generate_batch': BatchInput,
     'get_task': TaskLookupInput, 'list_tasks': TaskListInput, 'get_image': ImageInput,
+    'export_image': ExportImageInput,
+    'preview_cleanup': PreviewCleanupInput,
+    'execute_cleanup': ExecuteCleanupInput,
+    'authorize_cleanup': ExecuteCleanupInput,
+    'get_retention_policy': EmptyInput, 'set_retention_policy': SetRetentionPolicyInput,
     'recover_task': TaskInput, 'close_task': CloseInput, 'save_prompt_template': SaveTemplateInput,
     'accept_gif_size': AcceptGifSizeInput,
     'get_prompt_template': TemplateInput, 'list_prompt_templates': TemplateListInput,

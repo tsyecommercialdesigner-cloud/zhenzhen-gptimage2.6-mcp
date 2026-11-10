@@ -83,7 +83,7 @@ def _start_windows_detached(args, config_dir: Path) -> None:
         'SYSTEMROOT', 'WINDIR', 'PATH', 'PATHEXT', 'TEMP', 'TMP',
         'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'HOME', 'HOMEDRIVE', 'HOMEPATH',
         'PYTHONPATH', 'PYTHONHOME', 'PYTHONUTF8', 'PYTHONIOENCODING', 'VIRTUAL_ENV',
-        'ZHENZHEN_GPTIMAGEGEN_API_KEY', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
+        'ZHENZHEN_GPTIMAGEGEN_API_KEY', 'ZHENZHEN_GPTIMAGEGEN_EXPORT_ROOT', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
         'NO_PROXY', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
     }
     values = [f'{key}={value}' for key, value in os.environ.items() if key.upper() in allowed]

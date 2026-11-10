@@ -1,4 +1,4 @@
-"""Read a fixture created by the installed v0.1.1 release, not the worktree."""
+"""Read a fixture created by the installed v0.1.2 release, not the worktree."""
 import asyncio
 import hashlib
 import json
@@ -28,7 +28,7 @@ from zhenzhen_gptimage.generation.models import GenerationRequest
 from zhenzhen_gptimage.generation.snapshot import create_snapshot
 from zhenzhen_gptimage.generation.contracts import SaveTemplateInput
 from zhenzhen_gptimage.prompts.templates import save_template
-assert version('zhenzhen-gptimage2-6-mcp') == '0.1.1'
+assert version('zhenzhen-gptimage2-6-mcp') == '0.1.2'
 root=Path(sys.argv[1]); root.mkdir(parents=True)
 async def main():
     worker=DatabaseWorker(root/'state.sqlite3')
@@ -47,7 +47,7 @@ asyncio.run(main())
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not PYTHON.is_file(), reason='installed v0.1.1 is not available')
+@pytest.mark.skipif(not PYTHON.is_file(), reason='installed v0.1.2 is not available')
 async def test_legacy_install_data_remains_queryable(tmp_path, monkeypatch):
     monkeypatch.setenv('ZHENZHEN_GPTIMAGEGEN_API_KEY', 'test-only')
     root = tmp_path / 'data'

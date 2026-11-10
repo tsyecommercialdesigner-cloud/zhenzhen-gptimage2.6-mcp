@@ -188,12 +188,16 @@ class RecoveryService:
             return await self._row(task_id)
 
     async def image(self, task_id, index=0, include_preview=True):
-        row = await self.worker.fetchone('SELECT * FROM image_artifacts WHERE task_id=? AND image_index=?', (task_id, index))
-        if row is None: raise KeyError((task_id, index))
-        result = dict(row)
-        limits = self.materializer.limits
-        # MCP image content is base64 encoded; budget the encoded representation.
-        raw_limit = (limits.preview_bytes // 4) * 3
-        available, preview = await asyncio.to_thread(_read_image, result, include_preview, limits.preview_long_edge, raw_limit)
-        result['available'] = available
-        return result, preview
+        # A concurrent cleanup must not remove the original mid-read. If the
+        # caller cancels, keep the lock until the worker thread has finished.
+        from zhenzhen_gptimage.generation.admission import _finish_thread
+        async with self.locks.hold(task_id):
+            row = await self.worker.fetchone('SELECT * FROM image_artifacts WHERE task_id=? AND image_index=?', (task_id, index))
+            if row is None: raise KeyError((task_id, index))
+            result = dict(row)
+            limits = self.materializer.limits
+            # MCP image content is base64 encoded; budget the encoded representation.
+            raw_limit = (limits.preview_bytes // 4) * 3
+            available, preview = await _finish_thread(_read_image, result, include_preview, limits.preview_long_edge, raw_limit)
+            result['available'] = available
+            return result, preview
