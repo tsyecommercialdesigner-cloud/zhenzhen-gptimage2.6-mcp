@@ -80,3 +80,14 @@ async def running_service(config):
         if client is not None: await client.aclose()
         if worker is not None: await worker.close()
         lock.release()
+
+
+async def run_owned_backend(config, serve):
+    """Run a transport independently of backend ownership and cleanup.
+
+    The callback receives the one backend that owns the data-directory lock.
+    A future shared transport can use this entry point without starting an
+    additional scheduler or changing the established recovery ordering.
+    """
+    async with running_service(config) as backend:
+        await serve(backend)
