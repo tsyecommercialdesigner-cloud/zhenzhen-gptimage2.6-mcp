@@ -44,6 +44,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Validate specifications
         run: openspec validate --specs --strict
+      - name: Inspect runner ownership behavior
+        run: |
+          .venv/Scripts/python.exe -c "import pathlib, tempfile, win32security as w; from zhenzhen_gptimage.mcp_api.private_runtime import _windows_create, _windows_current_sid; p=pathlib.Path(tempfile.mkdtemp())/'private'; _windows_create(p); d=w.GetNamedSecurityInfo(str(p),w.SE_FILE_OBJECT,w.OWNER_SECURITY_INFORMATION|w.DACL_SECURITY_INFORMATION); c,_=d.GetSecurityDescriptorControl(); print('owner_is_current_user=', d.GetSecurityDescriptorOwner()==_windows_current_sid(), 'dacl_protected=', bool(c & w.SE_DACL_PROTECTED), 'ace_count=', d.GetSecurityDescriptorDacl().GetAceCount())"
       - name: Run complete test suite
         env:
           ZHENZHEN_TEST_V012_INSTALL: ${{ github.workspace }}\.ci-legacy-v012
