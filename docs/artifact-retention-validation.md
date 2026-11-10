@@ -19,3 +19,5 @@ DSH 补充权限检查：通过同一会话将目标指定为授权根目录外�
 发布版 Codex Desktop 验收：重新加载 MCP 后，从当前会话调用 `export_image`，将同一既有原件导出至 `D:\MCP-host-tests\zhenzhen-gptimage2.6\assets\generated\codex-v013-blue-mug.png`；工具返回成功，本机文件 SHA-256 与原件一致。`get_retention_policy` 返回 `enabled: false`、`retention_days: 90`；指定授权根目录外的目标时返回 `ARTIFACT_UNAVAILABLE`。三个 Host 使用同一配置数据目录；检查到共享后台是同一条父子进程链，Codex 和 DSH 均读到关闭的策略。此次验证未启用或执行清理，未发起新的生图请求；共享后台的并发及清理授权细节另由隔离自动化测试覆盖。
 
 v0.1.4 候选开发环境验证：取消导出根目录限制后，在 Windows 和 Python 3.12.14 上运行完整测试，285 通过、1 个 POSIX 权限测试跳过；其中通过隔离的 v0.1.2 标签安装副本验证旧数据升级和回滚。测试覆盖未配置根目录和已有根目录时导出到其他路径、原件哈希、文件冲突、GIF/SVG 原字节及并发清理。该记录不代表发布版安装或 Desktop 会话已验收。
+
+v0.1.4 发布版安装及协议验证：发布标签指向合并提交 `396dce31e98534d94c74127b3d5ad111f4d9a7b5`，其代码树与独立检出验证的 PR 提交一致；该独立检出完整测试 285 通过、1 跳过，OpenSpec 严格校验通过。升级前核对无未完成任务并备份四个 SQLite 数据库；升级后核对数据库逻辑内容、完整性及 7 个持久化配置和产物文件摘要一致，备份和脱敏账本保存在 `.cache/upgrade-v014/`。实际安装目录以发布标签及离线锁文件升级，并启动新版共享后台；用实际安装的 stdio MCP 客户端导出已有蓝杯原件到旧配置根目录之外的 `D:\MCP-host-tests\v014-export-verification\blue-mug.png`，副本摘要与原件一致，自动清理策略保持关闭。该协议测试未调用供应商；不代表新版在三个 Desktop 会话中分别完成验收。
