@@ -105,7 +105,7 @@ def create_server(backend: Backend | None = None) -> FastMCP:
         return await dispatch('get_image', locals())
     @app.tool
     async def export_image(task_id: str, destination: str, image_index: int = 0):
-        """复制已登记原件至预先授权的本机目录；destination 为服务器本机绝对文件路径，不覆盖已有文件。"""
+        """复制已登记原件至用户指定的本机绝对文件路径，不覆盖已有文件。"""
         return await dispatch('export_image', locals())
     @app.tool
     async def preview_cleanup(before: str | None = None, keep_latest: int | None = None):

@@ -13,9 +13,9 @@ def test_root_configuration_and_boundaries(tmp_path):
     cfg = load_config(tmp_path, tmp_path, environ={KEY_NAME: 'test', EXPORT_ROOT_NAME: str(root)})
     assert cfg.export_root == root
     assert validate_export_destination(cfg.export_root, root / 'assets' / 'image.png') == root / 'assets' / 'image.png'
-    with pytest.raises(ValueError): validate_export_destination(root, tmp_path / 'outside.png')
+    assert validate_export_destination(root, tmp_path / 'outside.png') == tmp_path / 'outside.png'
     with pytest.raises(ValueError): validate_export_destination(root, root / '..' / 'outside.png')
-    with pytest.raises(ValueError): validate_export_destination(None, root / 'image.png')
+    assert validate_export_destination(None, root / 'image.png') == root / 'image.png'
     with pytest.raises(ValueError): load_config(tmp_path, tmp_path, environ={KEY_NAME: 'test', EXPORT_ROOT_NAME: 'relative'})
     (root / 'exists.png').write_bytes(b'existing')
     with pytest.raises(FileExistsError): validate_export_destination(root, root / 'exists.png')
@@ -32,7 +32,7 @@ def test_linked_directory_rejected(tmp_path):
         validate_export_destination(root, root / 'link' / 'image.png')
 
 
-def test_missing_or_inaccessible_root_is_not_created(tmp_path, monkeypatch):
+def test_inaccessible_destination_parent_is_not_created(tmp_path, monkeypatch):
     root = tmp_path / 'missing'
     original = Path.lstat
     def denied(path):
