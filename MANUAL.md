@@ -77,7 +77,7 @@ Claude Desktop 日志若出现 `data directory is already in use`，先查看 De
 
 实际可发现的工具如下，结果统一包含 `ok`、`data`、`warnings`、`error`；失败时检查 `error.code`、`message`、`retryable` 和 `next_action`。Host 可通过工具 Schema 查看完整参数和约束。
 
-正在实施的 Desktop 兼容修复会在工具文本内容中提供与结构化结果一致的 JSON，便于仅读取文本的 Host 获取任务状态和 `local_path`；图片附件或预览副本不是原件。该修复尚未发布，成员请以安装版本和[验收记录](docs/manual-writing-validation.md)为准。
+从 v0.1.1 起，工具文本内容提供与结构化结果一致的 JSON，便于仅读取文本的 Host 获取任务状态和 `local_path`；图片附件或预览副本不是原件。v0.1.0 不包含此修复；版本发布与 Host 验证状态见[验收记录](docs/manual-writing-validation.md)。
 
 | 工具 | 用途与主要参数 |
 | --- | --- |
