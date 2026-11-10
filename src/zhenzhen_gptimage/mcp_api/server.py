@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import base64
 from typing import Any, Protocol
-from fastmcp import FastMCP
+from fastmcp import FastMCP, Context
 from fastmcp.tools.tool import ToolResult
 from mcp.types import CallToolResult, TextContent, ImageContent
 from pydantic import ValidationError
@@ -104,6 +104,66 @@ def create_server(backend: Backend | None = None) -> FastMCP:
         """查询已保存的原件和可选预览；local_path 指向原件，Host 附件可能只是预览副本。支持本地图片链接的 Host 可使用原件路径展示静态图片。"""
         return await dispatch('get_image', locals())
     @app.tool
+    async def export_image(task_id: str, destination: str, image_index: int = 0):
+        """复制已登记原件至预先授权的本机目录；destination 为服务器本机绝对文件路径，不覆盖已有文件。"""
+        return await dispatch('export_image', locals())
+    @app.tool
+    async def preview_cleanup(before: str | None = None, keep_latest: int | None = None):
+        """预览清理计划，不删除文件；before 为带时区的 ISO 日期时间。"""
+        return await dispatch('preview_cleanup', locals())
+    @app.tool
+    async def execute_cleanup(plan_id: str):
+        """执行已由用户在本机批准的预览计划；没有批准时不删除。"""
+        return await dispatch('execute_cleanup', locals())
+    @app.tool
+    async def authorize_cleanup(plan_id: str, ctx: Context):
+        """向支持交互确认的 Host 展示清理清单并请求用户授权，不删除文件。"""
+        try:
+            validated = TOOL_INPUTS['authorize_cleanup'].model_validate({'plan_id':plan_id})
+            if backend is None:
+                return ProtocolResult(_failure('CONFIG_ERROR','清理功能尚未接入','检查服务配置'))
+            result = await backend.call('__cleanup_plan__', {'plan_id':validated.plan_id})
+            if not result.get('ok'):
+                return ProtocolResult(result)
+            plan = result['data']
+            items = [{'kind':i.get('kind','image'),'task_id':i['task_id'],'image_index':i['image_index'],'local_path':i['local_path'],
+                      'bytes':i['bytes'],'sha256':i['sha256']} for i in plan['items']]
+            message = ('是否永久删除以下托管原件及列出的关联文件？确认只授权此计划，工作区导出副本不会删除。\n' +
+                       json.dumps({'plan_id':plan_id,'expires_at':plan['expires_at'],
+                                   'count':plan['count'],'bytes':plan['bytes'],'items':items},ensure_ascii=False))
+            if len(message.encode('utf-8')) > 16000:
+                return ProtocolResult(_failure('RESOURCE_LIMIT','清单过长，无法完整显示交互确认','使用本机 approve-cleanup 命令审核'))
+            try:
+                response = await ctx.elicit(message)
+            except Exception:
+                return ProtocolResult(_failure('CONFIG_ERROR','当前 Host 不支持用户交互确认','使用本机 approve-cleanup 命令审核'))
+            if response.action != 'accept':
+                return ProtocolResult(_failure('STATE_CONFLICT','用户未批准清理','重新预览后再申请授权'))
+            return ProtocolResult(await backend.call('__approve_cleanup__', {'plan_id':plan_id}))
+        except (ValidationError, ValueError, KeyError):
+            return ProtocolResult(_failure('INVALID_ARGUMENT','清理计划无效或已过期','重新预览'))
+    @app.tool
+    async def get_retention_policy():
+        """查询 90 天自动清理是否启用。"""
+        return await dispatch('get_retention_policy', {})
+    @app.tool
+    async def set_retention_policy(enabled: bool, ctx: Context):
+        """启用前须由用户确认；关闭不会启动清理。"""
+        try:
+            value = TOOL_INPUTS['set_retention_policy'].model_validate({'enabled':enabled})
+            if backend is None:
+                return ProtocolResult(_failure('CONFIG_ERROR','清理功能尚未接入','检查服务配置'))
+            if value.enabled:
+                try:
+                    response = await ctx.elicit('启用后，后台运行时会永久删除生成时间超过 90 天的符合条件的托管原件，以及其可安全清理的供应商响应、响应清单和参考图快照。确认启用吗？')
+                except Exception:
+                    return ProtocolResult(_failure('CONFIG_ERROR','当前 Host 不支持用户交互确认','使用本机 enable-auto-cleanup 命令'))
+                if response.action != 'accept':
+                    return ProtocolResult(_failure('STATE_CONFLICT','用户未批准启用自动清理','维持当前设置'))
+            return ProtocolResult(await backend.call('__set_retention_policy__', {'enabled':value.enabled}))
+        except ValidationError:
+            return ProtocolResult(_failure('INVALID_ARGUMENT','策略参数无效','检查 enabled 参数'))
+    @app.tool
     async def recover_task(task_id: str): return await dispatch('recover_task', locals())
     @app.tool
     async def accept_gif_size(task_id: str, sha256: str, width: int, height: int): return await dispatch('accept_gif_size', locals())
@@ -125,7 +185,11 @@ def create_server(backend: Backend | None = None) -> FastMCP:
     registered = {
         'get_capabilities': get_capabilities, 'generate_image': generate_image,
         'generate_batch': generate_batch, 'get_task': get_task, 'list_tasks': list_tasks,
-        'get_image': get_image, 'recover_task': recover_task, 'close_task': close_task,
+        'get_image': get_image, 'export_image': export_image, 'preview_cleanup': preview_cleanup,
+        'execute_cleanup': execute_cleanup,
+        'authorize_cleanup': authorize_cleanup,
+        'get_retention_policy': get_retention_policy, 'set_retention_policy': set_retention_policy,
+        'recover_task': recover_task, 'close_task': close_task,
         'accept_gif_size': accept_gif_size,
         'save_prompt_template': save_prompt_template, 'get_prompt_template': get_prompt_template,
         'list_prompt_templates': list_prompt_templates, 'render_prompt_template': render_prompt_template,

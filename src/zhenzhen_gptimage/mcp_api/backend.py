@@ -25,8 +25,10 @@ def failure(code, message, action, *, data=None, task_id=None):
     return {'ok':False,'data':data,'warnings':[],'error':error}
 
 class ServiceBackend:
-    def __init__(self, worker, generation, recovery=None):
+    def __init__(self, worker, generation, recovery=None, export_root=None, retention=None):
         self.worker, self.generation, self.recovery = worker, generation, recovery
+        self.export_root = export_root
+        self.retention = retention
 
     async def _task(self, row):
         row = dict(row)
@@ -35,11 +37,17 @@ class ServiceBackend:
             images=await self.worker.run(lambda db:[dict(r) for r in db.execute('SELECT * FROM pending_image_artifacts WHERE task_id=? ORDER BY image_index',(row['task_id'],))])
         for image in images:
             image.pop('revised_prompt',None); image.pop('created_at',None)
+            cleaned=await self.worker.fetchone('SELECT cleaned_at FROM artifact_cleanup_status WHERE task_id=? AND image_index=?',(row['task_id'],image['image_index']))
+            image['cleaned'] = cleaned is not None
+            uncertain=await self.worker.fetchone("SELECT 1 FROM artifact_cleanup_events WHERE task_id=? AND image_index=? AND state='uncertain' UNION ALL SELECT 1 FROM auxiliary_cleanup_events WHERE task_id=? AND state='uncertain' LIMIT 1",(row['task_id'],image['image_index'],row['task_id']))
+            image['cleanup_uncertain'] = uncertain is not None
             pending_metadata=image.pop('metadata_json',None)
             meta=await self.worker.fetchone('SELECT metadata_json FROM image_format_metadata WHERE task_id=? AND image_index=?',(row['task_id'],image['image_index']))
             if pending_metadata is not None or meta is not None:
                 image['metadata']=json.loads(pending_metadata if pending_metadata is not None else meta['metadata_json'])
-            if self.recovery is not None:
+            if cleaned is not None:
+                image['available'] = False
+            elif self.recovery is not None:
                 if pending_metadata is not None:
                     from zhenzhen_gptimage.artifacts.recovery import _read_image
                     import asyncio
@@ -80,12 +88,24 @@ class ServiceBackend:
         if name == 'accept_gif_size':
             row=await self.recovery.accept_gif_size(args['task_id'],args['sha256'],args['width'],args['height'])
             return await self._add_preview(success(await self._task(row)),args['task_id'])
-        row, preview=await self.recovery.image(args['task_id'],args.get('image_index',0),args.get('include_preview',True))
-        row=dict(row);row.pop('created_at',None);row.pop('revised_prompt',None)
+        cleaned=await self.worker.fetchone('SELECT cleaned_at FROM artifact_cleanup_status WHERE task_id=? AND image_index=?',(args['task_id'],args.get('image_index',0)))
+        uncertain=await self.worker.fetchone("SELECT 1 FROM artifact_cleanup_events WHERE task_id=? AND image_index=? AND state='uncertain' UNION ALL SELECT 1 FROM auxiliary_cleanup_events WHERE task_id=? AND state='uncertain' LIMIT 1",(args['task_id'],args.get('image_index',0),args['task_id']))
+        if cleaned is not None:
+            row=await self.worker.fetchone('SELECT * FROM image_artifacts WHERE task_id=? AND image_index=?',(args['task_id'],args.get('image_index',0)))
+            if row is None: raise KeyError('image')
+            row=dict(row);row['available']=False;preview=None
+        else:
+            row, preview=await self.recovery.image(args['task_id'],args.get('image_index',0),args.get('include_preview',True))
+            row=dict(row)
+        row.pop('created_at',None);row.pop('revised_prompt',None)
+        row['cleaned'] = cleaned is not None
+        row['cleanup_uncertain'] = uncertain is not None
         meta=await self.worker.fetchone('SELECT metadata_json FROM image_format_metadata WHERE task_id=? AND image_index=?',(args['task_id'],args.get('image_index',0)))
         if meta is not None: row['metadata']=json.loads(meta['metadata_json'])
         if not row['available']:
-            return failure('ARTIFACT_UNAVAILABLE','图片文件不可用','检查本地文件',data=row,task_id=args['task_id'])
+            message = '图片原件已清理' if cleaned is not None else ('清理结果不明' if uncertain is not None else '图片文件不可用')
+            action = '检查清理账本及工作区导出副本' if uncertain is not None else ('检查历史或工作区导出副本' if cleaned is not None else '检查本地文件')
+            return failure('ARTIFACT_UNAVAILABLE',message,action,data=row,task_id=args['task_id'])
         result=success(row)
         if args.get('include_preview',True) and preview is None:
             result['warnings'].append('预览不可用，原图仍可使用')
@@ -108,6 +128,54 @@ class ServiceBackend:
 
     async def call(self, name, args):
         try:
+            if name == '__cleanup_plan__':
+                if self.retention is None:
+                    return failure('CONFIG_ERROR','清理功能尚未接入','检查服务配置')
+                return success(self.retention.get_plan(args['plan_id']))
+            if name == '__retention_policy__':
+                if self.retention is None: return failure('CONFIG_ERROR','清理功能尚未接入','检查服务配置')
+                return success(await self.retention.policy())
+            if name == '__set_retention_policy__':
+                if self.retention is None: return failure('CONFIG_ERROR','清理功能尚未接入','检查服务配置')
+                if type(args.get('enabled')) is not bool: raise ValueError('invalid policy')
+                return success(await self.retention.set_policy(args['enabled']))
+            if name == 'get_retention_policy':
+                if self.retention is None: return failure('CONFIG_ERROR','清理功能尚未接入','检查服务配置')
+                return success(await self.retention.policy())
+            if name == '__approve_cleanup__':
+                if self.retention is None:
+                    return failure('CONFIG_ERROR','清理功能尚未接入','检查服务配置')
+                await self.retention.approve(args['plan_id'])
+                return success({'plan_id':args['plan_id'],'approved':True})
+            if name == 'preview_cleanup':
+                if self.retention is None:
+                    return failure('CONFIG_ERROR','清理功能尚未接入','检查服务配置')
+                return success(await self.retention.preview(before_ms=millis(args.get('before')),
+                                                            keep_latest=args.get('keep_latest')))
+            if name == 'execute_cleanup':
+                if self.retention is None:
+                    return failure('CONFIG_ERROR','清理功能尚未接入','检查服务配置')
+                return success(await self.retention.execute(args['plan_id']))
+            if name == 'export_image':
+                if self.recovery is None or self.export_root is None:
+                    return failure('CONFIG_ERROR','未配置已授权的导出目录','配置服务器本机导出根目录')
+                from pathlib import Path
+                from zhenzhen_gptimage.artifacts.export import export_original
+                from zhenzhen_gptimage.generation.admission import _finish_thread
+                async with self.recovery.locks.hold(args['task_id']):
+                    row = await self.worker.fetchone('''SELECT a.* FROM image_artifacts a JOIN tasks t ON t.task_id=a.task_id
+                        LEFT JOIN artifact_cleanup_status c ON c.task_id=a.task_id AND c.image_index=a.image_index
+                        WHERE a.task_id=? AND a.image_index=? AND t.status='succeeded' AND c.task_id IS NULL''',
+                        (args['task_id'], args.get('image_index', 0)))
+                    if row is None:
+                        raise KeyError('image')
+                    try:
+                        result = await _finish_thread(export_original, dict(row), self.export_root, Path(args['destination']))
+                    except FileExistsError:
+                        return failure('STATE_CONFLICT','目标文件已存在','选择其他目标路径')
+                    except (OSError, ValueError):
+                        return failure('ARTIFACT_UNAVAILABLE','无法安全导出原件','检查原件、目标路径和权限')
+                    return success(result)
             if name == 'get_capabilities':
                 from .server import capabilities
                 return success(capabilities())

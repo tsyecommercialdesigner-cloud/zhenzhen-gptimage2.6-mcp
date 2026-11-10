@@ -96,6 +96,9 @@ uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync python -m zhenzhen_
 | `generate_image` / `generate_batch` | `request` / `requests`；批量最多 20 项。 |
 | `get_task` / `list_tasks` | 按任务 ID 或幂等键查询；列表支持状态、批次、模型、时间及分页筛选。 |
 | `get_image` | `task_id`、`image_index`、`include_preview`，获取路径和可用预览。 |
+| `export_image` | 开发版本：`task_id`、`image_index`、`destination`，将原件复制到已授权本机导出目录；尚未完成发布及 Desktop 验收。 |
+| `preview_cleanup` / `authorize_cleanup` / `execute_cleanup` | 开发版本：预览、请求用户确认、执行具体计划；尚未发布及完成 Desktop 验收。 |
+| `get_retention_policy` / `set_retention_policy` | 开发版本：查询或修改 90 天自动清理策略；启用须用户确认。 |
 | `recover_task` | `task_id`，恢复同一任务，不新建生成。 |
 | `accept_gif_size` | `task_id`、`sha256`、实际 `width` 和 `height`，接受待确认 GIF。 |
 | `close_task` | `task_id`、`expected_status`、`reason`；仅处理允许结案的状态。 |
@@ -106,6 +109,24 @@ Resources：`gptimage://capabilities`、`gptimage://prompt-guide`、`gptimage://
 ## 8. 功能说明
 
 可先让 Agent 依据资源和实际商品事实优化提示词，再提交单项或批量请求。每项需唯一 `idempotency_key`、`family`（`flare` 或 `sunburst`），并且 `prompt` 与 `template_code` 二选一。普通图像的 `images`、`flux` 通道需宽高；`chat` 不接受自定义宽高，尺寸由供应商决定。默认通道 `images`；模型按宽高和 family 路由，`explicit_model` 必须与路由一致。参考图使用 `references` 中的本地 `local_path`，最多 4 张；Flux 不支持参考图。模板可传 `template_variables`。
+
+开发版本可在用户配置 `ZHENZHEN_GPTIMAGEGEN_EXPORT_ROOT` 后调用 `export_image`：`destination` 必须是该目录下的服务器本机绝对文件路径，扩展名与原件一致；已有文件不会覆盖。返回目标路径、类型、字节数及 SHA-256。GIF 和 SVG 按原字节复制。Cowork 内的沙箱路径不一定是 Windows 本机路径，若无法确定对应关系，应由用户提供本机工作区路径；不可自行猜测。此功能尚未发布，Cowork 实际归档及打开验收待完成。配置步骤见[本地配置](docs/configuration.md)。
+
+开发版本支持手动清理：先调用 `preview_cleanup`，提供带时区的 `before` 日期时间，或提供 `keep_latest` 保留最新数量，两者选择一个。预览包含计划 ID、到期时间、候选文件及大小、摘要和跳过原因；确认前不会删除。用户逐项审查后，可由支持 MCP 交互确认的 Host 调用 `authorize_cleanup` 并在确认界面批准，再调用 `execute_cleanup`。若 Host 不支持交互确认，用户可在本机终端执行以下命令，查看完整清单后按提示输入 `APPROVE` 和计划 ID，随后让 Agent 调用 `execute_cleanup`：
+
+```powershell
+uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync python -m zhenzhen_gptimage.mcp_api.backend_control approve-cleanup --config-dir D:/MCP/zhenzhen-gptimage2.6-mcp --data-dir D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/codex --plan-id <计划ID>
+```
+
+实际运行时将 `<计划ID>` 替换为预览返回的 ID。计划有效期为 10 分钟，后台重启后失效；每个计划只能执行一次，变化的文件会跳过。候选可能包含已完成任务的托管原件，以及在该任务所有原件均符合清理条件时，可核验且不再供其他任务使用的供应商响应、响应清单和参考图快照；预览会列出每个具体文件。任务历史、未完成任务和工作区导出副本保留；无法核验或归属不明的文件保留。中断后如结果不明，历史返回 `cleanup_uncertain`，需检查清理账本及备份，不能自动重试删除。
+
+每个计划最多列出 1000 个候选；若 `has_more` 为 `true`，执行后可使用相同筛选条件重新预览下一批并逐批确认。`skipped_truncated` 为 `true` 表示跳过原因未全部列出，不影响计划中的候选范围。
+
+开发版本的 90 天自动清理默认关闭。先用 `get_retention_policy` 查询；仅在明确接受永久删除超过 90 天的符合条件原件及其可安全清理的供应商响应、响应清单和参考图快照后，调用 `set_retention_policy(enabled=true)` 并在 Host 确认界面批准。Host 不支持确认时，用户可在本机终端运行以下命令，阅读提示并输入 `ENABLE 90 DAYS`；关闭时调用 `set_retention_policy(enabled=false)`。服务只在后台运行时检查，关闭会等待当前正在处理的删除并阻止启动下一次删除；非运行期间不执行清理。该功能尚未发布及完成 Desktop 验收。
+
+```powershell
+uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync python -m zhenzhen_gptimage.mcp_api.backend_control enable-auto-cleanup --config-dir D:/MCP/zhenzhen-gptimage2.6-mcp --data-dir D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/codex
+```
 
 SVG/GIF 仅文生图：通过 `output_format` 指定，`size` 支持 `auto`、规定比例或像素尺寸，也可使用 `width` 和 `height`，两种尺寸形式不能同时使用。SVG 仅允许基础 Flare，默认绘制模型 `gpt-6-luna`；GIF 的 `frame_count` 为 2–16，`frame_duration_ms` 最少 20 且为 10 的倍数。像素尺寸与 GIF 拼图限制、供应商验证范围及实际尺寸不符处理详见 [SVG 和 GIF](docs/svg-gif.md)。GIF 的 JPEG 预览仅为首帧，保存的 GIF 原件保留动画；SVG 原件为矢量，Host 预览可能不可用。
 

@@ -12,6 +12,9 @@ def schema() -> str:
 def schema_v2() -> str:
     return files('zhenzhen_gptimage.repository').joinpath('schema_v2.sql').read_text(encoding='utf-8')
 
+def schema_v3() -> str:
+    return files('zhenzhen_gptimage.repository').joinpath('schema_v3.sql').read_text(encoding='utf-8')
+
 def connect(path: Path) -> sqlite3.Connection:
     db = sqlite3.connect(path, timeout=5, isolation_level=None)
     try:
@@ -30,7 +33,7 @@ def initialize(db: sqlite3.Connection) -> None:
     sql = schema()
     checksum = hashlib.sha256(sql.encode('utf-8')).hexdigest()
     fresh = version == 0
-    if version in (1, 2):
+    if version in (1, 2, 3):
         row = db.execute('SELECT checksum FROM schema_migrations WHERE version=1').fetchone()
         if row is None or row[0] != checksum:
             raise RuntimeError('schema checksum mismatch')
@@ -38,9 +41,13 @@ def initialize(db: sqlite3.Connection) -> None:
             raise RuntimeError('database integrity check failed')
         if db.execute('PRAGMA foreign_key_check').fetchone() is not None:
             raise RuntimeError('database foreign key check failed')
-        if version == 2:
+        if version >= 2:
             row = db.execute('SELECT checksum FROM schema_migrations WHERE version=2').fetchone()
             if row is None or row[0] != hashlib.sha256(schema_v2().encode('utf-8')).hexdigest():
+                raise RuntimeError('schema checksum mismatch')
+        if version == 3:
+            row = db.execute('SELECT checksum FROM schema_migrations WHERE version=3').fetchone()
+            if row is None or row[0] != hashlib.sha256(schema_v3().encode('utf-8')).hexdigest():
                 raise RuntimeError('schema checksum mismatch')
             return
     elif version != 0:
@@ -59,12 +66,15 @@ def initialize(db: sqlite3.Connection) -> None:
             if db.in_transaction:
                 db.rollback()
             raise
-    else:
+    elif version == 1:
         # A file database must have a durable, consistent pre-upgrade backup.
         path = db.execute('PRAGMA database_list').fetchone()[2]
         if path:
             source = Path(path)
             backup(db, source.with_name(f'{source.name}.v1-backup-{uuid4().hex}.sqlite3'))
+    if version == 2:
+        _migrate_v3(db, make_backup=True)
+        return
     sql_v2 = schema_v2()
     checksum_v2 = hashlib.sha256(sql_v2.encode('utf-8')).hexdigest()
     # SQLite must not rewrite child FK references while the parent is renamed.
@@ -93,6 +103,34 @@ def initialize(db: sqlite3.Connection) -> None:
     finally:
         db.execute('PRAGMA legacy_alter_table=OFF')
         db.execute('PRAGMA foreign_keys=ON')
+    _migrate_v3(db, make_backup=False)
+
+def _migrate_v3(db: sqlite3.Connection, *, make_backup: bool) -> None:
+    path = db.execute('PRAGMA database_list').fetchone()[2]
+    if make_backup and path:
+        source = Path(path)
+        backup(db, source.with_name(f'{source.name}.v2-backup-{uuid4().hex}.sqlite3'))
+    sql = schema_v3()
+    checksum = hashlib.sha256(sql.encode('utf-8')).hexdigest()
+    try:
+        db.execute('BEGIN IMMEDIATE')
+        statement = ''
+        for line in sql.splitlines(keepends=True):
+            statement += line
+            if sqlite3.complete_statement(statement):
+                db.execute(statement)
+                statement = ''
+        if statement.strip():
+            raise RuntimeError('incomplete migration statement')
+        db.execute('INSERT INTO schema_migrations VALUES (3,?,?)', (time.time_ns() // 1_000_000, checksum))
+        db.execute('PRAGMA user_version=3')
+        if db.execute('PRAGMA foreign_key_check').fetchone() is not None:
+            raise RuntimeError('foreign key check failed during migration')
+        db.commit()
+    except BaseException:
+        if db.in_transaction:
+            db.rollback()
+        raise
 
 def backup(db: sqlite3.Connection, destination: Path) -> None:
     """Create a consistent snapshot without overwriting an existing file."""

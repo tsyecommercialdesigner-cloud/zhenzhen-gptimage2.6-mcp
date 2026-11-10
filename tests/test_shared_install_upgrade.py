@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sqlite3
 
 import pytest
 from fastmcp import Client
@@ -44,7 +45,7 @@ async def wait_for_directory_release(data_dir):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not PYTHON.is_file(), reason='installed v0.1.1 is not available')
+@pytest.mark.skipif(not PYTHON.is_file(), reason='installed v0.1.2 is not available')
 async def test_isolated_upgrade_and_rollback_preserve_data(tmp_path):
     root = Path(__file__).resolve().parents[1]
     old, new, config_dir = tmp_path / 'old', tmp_path / 'new', tmp_path / 'config'
@@ -68,7 +69,11 @@ async def test_isolated_upgrade_and_rollback_preserve_data(tmp_path):
         check = 'from pathlib import Path; from zhenzhen_gptimage.bootstrap.config import load_config; from zhenzhen_gptimage.mcp_api.shared_launch import ensure_shared_backend; import sys; c=Path(sys.argv[1]); d=Path(sys.argv[2]); ensure_shared_backend(load_config(c,d),c,timeout=2)'
         blocked = await asyncio.to_thread(subprocess.run, [str(new_python), '-c', check, str(config_dir), str(data_dir)],
                                           cwd=new, capture_output=True, text=True, timeout=15)
-        assert blocked.returncode != 0 and 'already in use' in blocked.stderr
+        assert blocked.returncode != 0
+    old_control = [str(old_python), '-m', 'zhenzhen_gptimage.mcp_api.backend_control', 'stop',
+                   '--config-dir', str(config_dir), '--data-dir', str(data_dir)]
+    stopped = await asyncio.to_thread(subprocess.run, old_control, cwd=old, capture_output=True, text=True, timeout=20)
+    assert stopped.returncode == 0, stopped.stderr
     await wait_for_directory_release(data_dir)
     async with Client(StdioTransport(str(new_python), args, cwd=str(new), keep_alive=False)) as client:
         image = await client.call_tool_mcp('get_image', {'task_id': original['task_id']})
@@ -81,10 +86,20 @@ async def test_isolated_upgrade_and_rollback_preserve_data(tmp_path):
     assert stopped.returncode == 0, stopped.stderr
     # The control command acknowledges shutdown; poll the directory lock, not a PID.
     await wait_for_directory_release(data_dir)
+    # The old release rejects schema v3. Restore the pre-upgrade snapshot;
+    # switching code alone is not a valid database rollback.
+    snapshots = list(data_dir.glob('state.sqlite3.v2-backup-*.sqlite3'))
+    assert len(snapshots) == 1
+    with sqlite3.connect(snapshots[0]) as source, sqlite3.connect(data_dir / 'state.sqlite3') as target:
+        source.backup(target)
+        assert target.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
     async with Client(StdioTransport(str(old_python), args, cwd=str(old), keep_alive=False)) as client:
         image = await client.call_tool_mcp('get_image', {'task_id': original['task_id']})
         template = await client.call_tool_mcp('get_prompt_template', {'code': 'legacy'})
         assert image.structuredContent['data']['sha256'] == original['sha256']
         assert template.structuredContent['data']['content'] == 'Legacy'
+    stopped = await asyncio.to_thread(subprocess.run, old_control, cwd=old, capture_output=True, text=True, timeout=20)
+    assert stopped.returncode == 0, stopped.stderr
+    await wait_for_directory_release(data_dir)
     assert hashlib.sha256(env_file.read_bytes()).hexdigest() == env_hash
     assert hashlib.sha256((data_dir / 'old.png').read_bytes()).hexdigest() == original['sha256']

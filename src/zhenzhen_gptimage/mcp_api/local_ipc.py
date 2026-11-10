@@ -33,6 +33,7 @@ def configuration_identity(config, config_dir, token: str, version: str) -> str:
         'env_file': str(config.env_file.resolve()),
         'provider': config.provider,
         'base_url': config.base_url,
+        'export_root': str(config.export_root) if config.export_root is not None else None,
         'limits': config.limits.model_dump(mode='json'),
         'api_key': config.api_key.get_secret_value(),
         'version': version,
@@ -114,6 +115,26 @@ class IPCServer:
                 # The idle connection represents a live stdio frontend. EOF
                 # releases it; it does not cancel accepted business calls.
                 await reader.read(1)
+                return
+            if request.get('op') in ('cleanup_plan', 'approve_cleanup'):
+                plan_id = request.get('plan_id')
+                if not isinstance(plan_id, str) or len(plan_id) != 32 or self.backend.retention is None:
+                    raise IPCError('invalid cleanup plan')
+                try:
+                    if request['op'] == 'cleanup_plan':
+                        plan = self.backend.retention.get_plan(plan_id)
+                        await write_frame(writer, {'status': 'ok', 'plan': plan}, timeout=HANDSHAKE_TIMEOUT)
+                    else:
+                        await self.backend.retention.approve(plan_id)
+                        await write_frame(writer, {'status': 'approved'}, timeout=HANDSHAKE_TIMEOUT)
+                except ValueError:
+                    await write_frame(writer, {'status': 'invalid_plan'}, timeout=HANDSHAKE_TIMEOUT)
+                return
+            if request == {'op': 'enable_auto_cleanup'}:
+                if self.backend.retention is None:
+                    raise IPCError('cleanup unavailable')
+                policy = await self.backend.retention.set_policy(True)
+                await write_frame(writer, {'status': 'enabled', 'policy':policy}, timeout=HANDSHAKE_TIMEOUT)
                 return
             if (request.get('op') != 'call' or not isinstance(request.get('name'), str)
                     or not isinstance(request.get('args'), dict)):

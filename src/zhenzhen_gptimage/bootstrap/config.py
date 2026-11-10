@@ -52,11 +52,13 @@ class RuntimeConfig(BaseModel):
     base_url: str = "https://ai.t8star.org"
     env_file: Path
     data_dir: Path
+    export_root: Path | None = None
     api_key: SecretStr = Field(exclude=True, repr=False)
     secret_source: str
     limits: Limits = Field(default_factory=Limits)
 
 KEY_NAME = "ZHENZHEN_GPTIMAGEGEN_API_KEY"
+EXPORT_ROOT_NAME = "ZHENZHEN_GPTIMAGEGEN_EXPORT_ROOT"
 
 def _user_key() -> str | None:
     return _user_env(KEY_NAME)
@@ -83,6 +85,7 @@ def load_config(config_dir: Path, data_dir: Path, *, env_file: Path | None = Non
     path = env_file if env_file is not None else config_dir / '.env'
     missing = object()
     file_value: object = missing
+    export_value: object = missing
     try:
         with path.open(encoding='utf-8-sig') as stream:
             for binding in parse_stream(stream):
@@ -92,6 +95,12 @@ def load_config(config_dir: Path, data_dir: Path, *, env_file: Path | None = Non
                     if file_value is not missing:
                         raise ValueError(f"Duplicate {KEY_NAME} in .env")
                     file_value = binding.value
+                if binding.key == EXPORT_ROOT_NAME:
+                    if export_value is not missing:
+                        raise ValueError(f"Duplicate {EXPORT_ROOT_NAME} in .env")
+                    if binding.value is None:
+                        raise ValueError(f"Invalid {EXPORT_ROOT_NAME} in .env")
+                    export_value = binding.value
     except FileNotFoundError:
         if path.is_symlink():
             raise ValueError('Unable to read or decode .env') from None
@@ -108,5 +117,14 @@ def load_config(config_dir: Path, data_dir: Path, *, env_file: Path | None = Non
             raise ValueError(f"Missing {KEY_NAME}")
     if not isinstance(value, str) or not value.strip() or any(ord(c) < 32 or ord(c) == 127 for c in value):
         raise ValueError(f"Invalid {KEY_NAME} in {source}")
+    if export_value is missing:
+        export_value = process[EXPORT_ROOT_NAME] if EXPORT_ROOT_NAME in process else _user_env(EXPORT_ROOT_NAME)
+    export_root = None
+    if export_value is not None:
+        if not isinstance(export_value, str) or not export_value.strip() or any(ord(c) < 32 for c in export_value):
+            raise ValueError(f"Invalid {EXPORT_ROOT_NAME}")
+        export_root = Path(export_value)
+        if not export_root.is_absolute() or '..' in export_root.parts:
+            raise ValueError(f"{EXPORT_ROOT_NAME} must be an absolute path without parent traversal")
     return RuntimeConfig(env_file=path, data_dir=data_dir.resolve(), api_key=value.strip(),
-                         secret_source=source, limits=limits or Limits())
+                         secret_source=source, limits=limits or Limits(), export_root=export_root)

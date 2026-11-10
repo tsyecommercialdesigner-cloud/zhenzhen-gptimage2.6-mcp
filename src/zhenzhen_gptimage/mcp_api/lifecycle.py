@@ -45,13 +45,14 @@ async def running_service(config):
     from zhenzhen_gptimage.providers.t8_star.client import T8StarClient
     from zhenzhen_gptimage.artifacts.output import ArtifactMaterializer
     from zhenzhen_gptimage.artifacts.recovery import RecoveryService
+    from zhenzhen_gptimage.artifacts.retention import RetentionService
     from zhenzhen_gptimage.generation.task_locks import TaskLocks
     from zhenzhen_gptimage.generation.admission import Admission
     from zhenzhen_gptimage.generation.service import GenerationService
     from zhenzhen_gptimage.scheduler.engine import Scheduler
     from .backend import ServiceBackend
     lock=InstanceLock(config.data_dir); lock.acquire()
-    worker=client=materializer=scheduler=admission=recovery=None
+    worker=client=materializer=scheduler=admission=recovery=retention_task=None
     try:
         worker=DatabaseWorker(config.data_dir/'state.sqlite3')
         await worker.fetchone('SELECT 1')
@@ -66,13 +67,19 @@ async def running_service(config):
         # No task is scheduled until interrupted operations are classified.
         await recovery.startup()
         await scheduler.resume()
-        yield ServiceBackend(worker,GenerationService(admission,scheduler),recovery)
+        retention=RetentionService(worker,config.data_dir,locks)
+        await retention.reconcile_intents()
+        retention_task=asyncio.create_task(retention.automatic_loop())
+        yield ServiceBackend(worker,GenerationService(admission,scheduler),recovery,config.export_root,retention)
     finally:
         # Stop scheduling immediately, even if an admission transaction needs
         # time to finish. Its durable cleanup may exceed the grace window.
         deadline = asyncio.get_running_loop().time() + min(30, config.limits.shutdown_seconds)
         if scheduler is not None: scheduler.closing = True
         if admission is not None: await admission.stop()
+        if retention_task is not None:
+            retention_task.cancel()
+            await asyncio.gather(retention_task, return_exceptions=True)
         remaining = lambda: max(0, deadline - asyncio.get_running_loop().time())
         if scheduler is not None: await scheduler.close(grace_seconds=remaining())
         if recovery is not None: await recovery.shutdown(grace_seconds=remaining())
