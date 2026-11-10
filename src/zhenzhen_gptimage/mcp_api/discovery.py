@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import secrets
 
-from .private_runtime import private_runtime_dir, verify_private_file
+from .private_runtime import create_private_file, private_runtime_dir, verify_private_file
 
 MAX_DESCRIPTOR_BYTES = 4096
 
@@ -38,7 +38,7 @@ def publish_endpoint(data_dir: Path, endpoint: Endpoint) -> None:
     if len(payload) > MAX_DESCRIPTOR_BYTES:
         raise ValueError('backend discovery data is too large')
     temporary = root / ('endpoint-' + secrets.token_hex(16) + '.tmp')
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    fd = create_private_file(temporary)
     try:
         # Verify ACL before writing the token; the file inherits the private
         # directory ACL on Windows and is created with 0600 on POSIX.

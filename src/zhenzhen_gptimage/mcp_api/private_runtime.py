@@ -36,6 +36,7 @@ def _windows_create(path: Path) -> None:
     flags = win32security.OBJECT_INHERIT_ACE | win32security.CONTAINER_INHERIT_ACE
     acl.AddAccessAllowedAceEx(win32security.ACL_REVISION, flags, ntsecuritycon.FILE_ALL_ACCESS, sid)
     descriptor = win32security.SECURITY_DESCRIPTOR()
+    descriptor.SetSecurityDescriptorOwner(sid, False)
     descriptor.SetSecurityDescriptorDacl(1, acl, 0)
     descriptor.SetSecurityDescriptorControl(win32security.SE_DACL_PROTECTED,
                                             win32security.SE_DACL_PROTECTED)
@@ -46,6 +47,30 @@ def _windows_create(path: Path) -> None:
     except pywintypes.error as exc:
         if exc.winerror != 183:  # ERROR_ALREADY_EXISTS
             raise
+
+
+def create_private_file(path: Path) -> int:
+    """Create a new private file with the current user as its owner."""
+    if os.name != 'nt':
+        return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    import msvcrt
+    import pywintypes
+    import win32con
+    import win32file
+    import win32security
+
+    descriptor = win32security.SECURITY_DESCRIPTOR()
+    descriptor.SetSecurityDescriptorOwner(_windows_current_sid(), False)
+    attrs = pywintypes.SECURITY_ATTRIBUTES()
+    attrs.SECURITY_DESCRIPTOR = descriptor
+    handle = win32file.CreateFile(str(path), win32con.GENERIC_WRITE, 0, attrs,
+                                  win32con.CREATE_NEW, win32con.FILE_ATTRIBUTE_NORMAL, None)
+    raw_handle = handle.Detach()
+    try:
+        return msvcrt.open_osfhandle(raw_handle, os.O_WRONLY | os.O_BINARY)
+    except BaseException:
+        win32file.CloseHandle(raw_handle)
+        raise
 
 
 def _windows_verify(path: Path) -> None:

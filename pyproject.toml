@@ -1,6 +1,6 @@
 [project]
 name = "zhenzhen-gptimage2-6-mcp"
-version = "0.1.4"
+version = "0.1.5"
 description = "Local MCP image generation server"
 requires-python = "==3.12.14"
 dependencies = [

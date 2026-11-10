@@ -21,3 +21,5 @@ DSH 补充权限检查：通过同一会话将目标指定为授权根目录外�
 v0.1.4 候选开发环境验证：取消导出根目录限制后，在 Windows 和 Python 3.12.14 上运行完整测试，285 通过、1 个 POSIX 权限测试跳过；其中通过隔离的 v0.1.2 标签安装副本验证旧数据升级和回滚。测试覆盖未配置根目录和已有根目录时导出到其他路径、原件哈希、文件冲突、GIF/SVG 原字节及并发清理。该记录不代表发布版安装或 Desktop 会话已验收。
 
 v0.1.4 发布版安装及协议验证：发布标签指向合并提交 `396dce31e98534d94c74127b3d5ad111f4d9a7b5`，其代码树与独立检出验证的 PR 提交一致；该独立检出完整测试 285 通过、1 跳过，OpenSpec 严格校验通过。升级前核对无未完成任务并备份四个 SQLite 数据库；升级后核对数据库逻辑内容、完整性及 7 个持久化配置和产物文件摘要一致，备份和脱敏账本保存在 `.cache/upgrade-v014/`。实际安装目录以发布标签及离线锁文件升级，并启动新版共享后台；用实际安装的 stdio MCP 客户端导出已有蓝杯原件到旧配置根目录之外的 `D:\MCP-host-tests\v014-export-verification\blue-mug.png`，副本摘要与原件一致，自动清理策略保持关闭。该协议测试未调用供应商；不代表新版在三个 Desktop 会话中分别完成验收。
+
+v0.1.4 三个 Desktop 会话导出验证：Codex Desktop、Claude Desktop Cowork 和 DeepSeek Harness Desktop 分别调用 `export_image`，将同一个既有 PNG 导出到 `D:\MCP-host-tests\v014-codex\assets\blue-mug.png`、`D:\MCP-host-tests\v014-claude\assets\blue-mug.png` 和 `D:\MCP-host-tests\v014-dsh\assets\blue-mug.png`，均位于旧导出根目录之外。独立核对三个副本与原件的 SHA-256 一致（`5b834ee871edbd45c3fb5e309021cf52890ea8a23c72dc6ba49b54f143a2703f`）。DSH 会话读取了其副本；Cowork 因该次目标目录未挂载而无法在沙箱内读取，文件存在和摘要由本机独立核对，未验证 Cowork 对该目录的直接访问。本轮未生成新图片或执行清理。

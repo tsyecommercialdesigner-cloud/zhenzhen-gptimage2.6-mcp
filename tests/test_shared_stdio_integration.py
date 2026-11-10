@@ -20,6 +20,7 @@ from PIL import Image
 @pytest.mark.asyncio
 async def test_two_stdio_processes_share_templates_and_backend(tmp_path, monkeypatch):
     monkeypatch.setenv('ZHENZHEN_GPTIMAGEGEN_API_KEY', 'test-only-secret')
+    (tmp_path / '.env').write_text('ZHENZHEN_GPTIMAGEGEN_API_KEY=test-only-secret\n', encoding='utf-8')
     root = tmp_path / 'data'
     root.mkdir()
     db = DatabaseWorker(root / 'state.sqlite3')
