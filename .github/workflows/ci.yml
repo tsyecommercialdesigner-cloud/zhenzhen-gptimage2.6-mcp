@@ -47,7 +47,9 @@ jobs:
       - name: Inspect runner ownership behavior
         run: |
           .venv/Scripts/python.exe -c "import pathlib, tempfile, win32security as w; from zhenzhen_gptimage.mcp_api.private_runtime import _windows_create, _windows_current_sid; p=pathlib.Path(tempfile.mkdtemp())/'private'; _windows_create(p); d=w.GetNamedSecurityInfo(str(p),w.SE_FILE_OBJECT,w.OWNER_SECURITY_INFORMATION|w.DACL_SECURITY_INFORMATION); c,_=d.GetSecurityDescriptorControl(); print('owner_is_current_user=', d.GetSecurityDescriptorOwner()==_windows_current_sid(), 'dacl_protected=', bool(c & w.SE_DACL_PROTECTED), 'ace_count=', d.GetSecurityDescriptorDacl().GetAceCount())"
+      - name: Test runtime ACL under runner's default token
+        run: .venv/Scripts/python.exe -m pytest tests/test_private_runtime.py tests/test_discovery.py -q --basetemp="${{ runner.temp }}/zhenzhen-acl-tests"
       - name: Run complete test suite
         env:
           ZHENZHEN_TEST_V012_INSTALL: ${{ github.workspace }}\.ci-legacy-v012
-        run: .venv/Scripts/python.exe -m pytest -q --basetemp="${{ runner.temp }}/zhenzhen-tests"
+        run: .venv/Scripts/python.exe tests/run_windows_ci.py
