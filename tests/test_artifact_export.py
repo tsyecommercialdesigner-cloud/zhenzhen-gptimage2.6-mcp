@@ -61,7 +61,8 @@ def test_copy_failures_leave_no_published_file(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mcp_export_schema_and_no_generation(tmp_path):
+@pytest.mark.parametrize('configured_root', [False, True])
+async def test_mcp_export_schema_and_no_generation(tmp_path, configured_root):
     source=tmp_path/'source';source.write_bytes(b'original')
     root=tmp_path/'workspace';root.mkdir()
     row={'task_id':'t','image_index':0,'local_path':str(source),'mime_type':'image/png',
@@ -69,7 +70,7 @@ async def test_mcp_export_schema_and_no_generation(tmp_path):
     class Worker:
         async def fetchone(self, sql, values): return row if values == ('t',0) else None
     recovery=SimpleNamespace(locks=TaskLocks())
-    backend=ServiceBackend(Worker(),None,recovery,root)
+    backend=ServiceBackend(Worker(),None,recovery,root if configured_root else None)
     async with Client(create_server(backend)) as client:
         target=root/'mug.png'
         result=await client.call_tool_mcp('export_image',{'task_id':'t','destination':str(target)})
@@ -77,3 +78,6 @@ async def test_mcp_export_schema_and_no_generation(tmp_path):
         assert target.read_bytes() == b'original'
         again=await client.call_tool_mcp('export_image',{'task_id':'t','destination':str(target)})
         assert again.isError and again.structuredContent['error']['code'] == 'STATE_CONFLICT'
+        outside=tmp_path/'another-workspace'/'mug.png'
+        other=await client.call_tool_mcp('export_image',{'task_id':'t','destination':str(outside)})
+        assert not other.isError and outside.read_bytes() == b'original'

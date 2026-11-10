@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -14,7 +15,7 @@ from zhenzhen_gptimage.mcp_api.lifecycle import InstanceLock
 from zhenzhen_gptimage.mcp_api.local_ipc import RemoteBackend
 from zhenzhen_gptimage.mcp_api.shared_launch import ensure_shared_backend
 
-INSTALL = Path('D:/MCP/zhenzhen-gptimage2.6-mcp')
+INSTALL = Path(os.environ.get('ZHENZHEN_TEST_V012_INSTALL', 'D:/MCP/zhenzhen-gptimage2.6-mcp'))
 PYTHON = INSTALL / '.venv/Scripts/python.exe'
 
 LEGACY_FIXTURE = r'''

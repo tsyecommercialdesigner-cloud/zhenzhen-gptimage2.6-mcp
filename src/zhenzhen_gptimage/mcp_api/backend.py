@@ -157,8 +157,8 @@ class ServiceBackend:
                     return failure('CONFIG_ERROR','清理功能尚未接入','检查服务配置')
                 return success(await self.retention.execute(args['plan_id']))
             if name == 'export_image':
-                if self.recovery is None or self.export_root is None:
-                    return failure('CONFIG_ERROR','未配置已授权的导出目录','配置服务器本机导出根目录')
+                if self.recovery is None:
+                    return failure('CONFIG_ERROR','导出功能尚未接入','检查服务配置')
                 from pathlib import Path
                 from zhenzhen_gptimage.artifacts.export import export_original
                 from zhenzhen_gptimage.generation.admission import _finish_thread

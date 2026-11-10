@@ -96,7 +96,7 @@ uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync python -m zhenzhen_
 | `generate_image` / `generate_batch` | `request` / `requests`；批量最多 20 项。 |
 | `get_task` / `list_tasks` | 按任务 ID 或幂等键查询；列表支持状态、批次、模型、时间及分页筛选。 |
 | `get_image` | `task_id`、`image_index`、`include_preview`，获取路径和可用预览。 |
-| `export_image` | 开发版本：`task_id`、`image_index`、`destination`，将原件复制到已授权本机导出目录；尚未完成发布及 Desktop 验收。 |
+| `export_image` | `task_id`、`image_index`、`destination`，将原件复制到指定的本机文件路径。 |
 | `preview_cleanup` / `authorize_cleanup` / `execute_cleanup` | 开发版本：预览、请求用户确认、执行具体计划；尚未发布及完成 Desktop 验收。 |
 | `get_retention_policy` / `set_retention_policy` | 开发版本：查询或修改 90 天自动清理策略；启用须用户确认。 |
 | `recover_task` | `task_id`，恢复同一任务，不新建生成。 |
@@ -110,7 +110,7 @@ Resources：`gptimage://capabilities`、`gptimage://prompt-guide`、`gptimage://
 
 可先让 Agent 依据资源和实际商品事实优化提示词，再提交单项或批量请求。每项需唯一 `idempotency_key`、`family`（`flare` 或 `sunburst`），并且 `prompt` 与 `template_code` 二选一。普通图像的 `images`、`flux` 通道需宽高；`chat` 不接受自定义宽高，尺寸由供应商决定。默认通道 `images`；模型按宽高和 family 路由，`explicit_model` 必须与路由一致。参考图使用 `references` 中的本地 `local_path`，最多 4 张；Flux 不支持参考图。模板可传 `template_variables`。
 
-开发版本可在用户配置 `ZHENZHEN_GPTIMAGEGEN_EXPORT_ROOT` 后调用 `export_image`：`destination` 必须是该目录下的服务器本机绝对文件路径，扩展名与原件一致；已有文件不会覆盖。返回目标路径、类型、字节数及 SHA-256。GIF 和 SVG 按原字节复制。Cowork 内的沙箱路径不一定是 Windows 本机路径，若无法确定对应关系，应由用户提供本机工作区路径；不可自行猜测。此功能尚未发布，Cowork 实际归档及打开验收待完成。配置步骤见[本地配置](docs/configuration.md)。
+`export_image` 的 `destination` 可使用用户指定的服务器本机绝对文件路径，无须预先设置导出目录；扩展名须与原件一致，已有文件不会覆盖。返回目标路径、类型、字节数及 SHA-256。GIF 和 SVG 按原字节复制。Cowork 内的沙箱路径不一定是 Windows 本机路径，若无法确定对应关系，应由用户提供本机工作区路径；不可自行猜测。v0.1.3 及更早版本仍要求配置导出根目录。
 
 开发版本支持手动清理：先调用 `preview_cleanup`，提供带时区的 `before` 日期时间，或提供 `keep_latest` 保留最新数量，两者选择一个。预览包含计划 ID、到期时间、候选文件及大小、摘要和跳过原因；确认前不会删除。用户逐项审查后，可由支持 MCP 交互确认的 Host 调用 `authorize_cleanup` 并在确认界面批准，再调用 `execute_cleanup`。若 Host 不支持交互确认，用户可在本机终端执行以下命令，查看完整清单后按提示输入 `APPROVE` 和计划 ID，随后让 Agent 调用 `execute_cleanup`：
 

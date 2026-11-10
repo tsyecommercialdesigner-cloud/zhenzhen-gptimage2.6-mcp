@@ -1,4 +1,4 @@
-"""Copy managed original bytes into an explicitly authorized directory."""
+"""Copy managed original bytes to a user-selected local destination."""
 from contextlib import ExitStack, contextmanager
 from hashlib import sha256
 import os
@@ -73,7 +73,7 @@ def _posix_parent(root: Path, parent: Path):
 
 def export_original(row: dict, root: Path | None, destination: Path) -> dict:
     destination = validate_export_destination(root, destination)
-    root = Path(os.path.abspath(root))
+    root = Path(destination.anchor)
     expected_extension = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp',
                           'image/gif': '.gif', 'image/svg+xml': '.svg'}.get(row['mime_type'])
     suffix = destination.suffix.lower()
