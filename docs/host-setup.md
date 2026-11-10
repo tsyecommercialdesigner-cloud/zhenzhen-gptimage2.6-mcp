@@ -44,6 +44,9 @@ overlay（保存为本地 YAML 文件，路径根据实际调整）：
         serverName: zhenzhen_gptimage
         transport: stdio
         command: uv
+        env:
+          NO_PROXY: "localhost,127.0.0.1,::1"
+          no_proxy: "localhost,127.0.0.1,::1"
         args:
           - run
           - --locked
@@ -57,6 +60,8 @@ overlay（保存为本地 YAML 文件，路径根据实际调整）：
         toolCallTimeoutMs: 630000
         failOnStartupError: true
 ```
+
+受影响的 DSH Desktop 0.2.1-rc.5 与 httpx 0.28.1 组合可能因继承的 `[::1]` 导致启动报 `Invalid port: ':1]'`。上述 `config.env` 只影响此 MCP 子进程；若原有绕过列表还有其他域名或地址，保留并合并到两个字段，例如两者都写 `localhost,127.0.0.1,::1,example.internal`，移除 `[::1]`。不要覆盖其他服务、代理地址或凭据。合并并重启后检查插件状态、工具发现与调用；隔离验证不等于真实 Desktop 通过。其他版本以实际验证为准。
 
 以 `dsh headless --patch <overlay绝对路径> --dump-config` 可检查合并后的配置；实际
 使用的 profile 应根据本机安装情况选择。隔离 overlay 的合并已验证，但尚未完成 DSH

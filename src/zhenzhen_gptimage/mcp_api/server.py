@@ -23,7 +23,7 @@ class ProtocolResult(ToolResult):
     def __init__(self, value: dict[str, Any]):
         preview = value.pop('_preview', None)
         self._value = value
-        content = [TextContent(type='text', text='完成' if value['ok'] else value['error']['message'])]
+        content = [TextContent(type='text', text=json.dumps(value, ensure_ascii=False))]
         if preview is not None:
             content.append(ImageContent(type='image', data=base64.b64encode(preview).decode('ascii'), mimeType='image/jpeg'))
         super().__init__(content=content,
@@ -85,7 +85,9 @@ def create_server(backend: Backend | None = None) -> FastMCP:
     @app.tool
     async def get_capabilities(): return await dispatch('get_capabilities', {})
     @app.tool
-    async def generate_image(request: GenerationRequest): return await dispatch('generate_image', {'request': request})
+    async def generate_image(request: GenerationRequest):
+        """生成图片；结果中的 local_path 是保存的原件，Host 附件可能只是预览副本。支持本地图片链接的 Host 可使用原件路径展示静态图片。"""
+        return await dispatch('generate_image', {'request': request})
     @app.tool
     async def generate_batch(requests: list[GenerationRequest]): return await dispatch('generate_batch', {'requests': requests})
     @app.tool
@@ -95,7 +97,9 @@ def create_server(backend: Backend | None = None) -> FastMCP:
                          created_from: str | None = None, created_to: str | None = None,
                          limit: int = 20, cursor: str | None = None): return await dispatch('list_tasks', locals())
     @app.tool
-    async def get_image(task_id: str, image_index: int = 0, include_preview: bool = True): return await dispatch('get_image', locals())
+    async def get_image(task_id: str, image_index: int = 0, include_preview: bool = True):
+        """查询已保存的原件和可选预览；local_path 指向原件，Host 附件可能只是预览副本。支持本地图片链接的 Host 可使用原件路径展示静态图片。"""
+        return await dispatch('get_image', locals())
     @app.tool
     async def recover_task(task_id: str): return await dispatch('recover_task', locals())
     @app.tool
