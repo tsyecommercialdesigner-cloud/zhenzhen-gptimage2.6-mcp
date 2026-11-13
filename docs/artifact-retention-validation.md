@@ -25,3 +25,19 @@ v0.1.4 发布版安装及协议验证：发布标签指向合并提交 `396dce31
 v0.1.4 三个 Desktop 会话导出验证：Codex Desktop、Claude Desktop Cowork 和 DeepSeek Harness Desktop 分别调用 `export_image`，将同一个既有 PNG 导出到 `D:\MCP-host-tests\v014-codex\assets\blue-mug.png`、`D:\MCP-host-tests\v014-claude\assets\blue-mug.png` 和 `D:\MCP-host-tests\v014-dsh\assets\blue-mug.png`，均位于旧导出根目录之外。独立核对三个副本与原件的 SHA-256 一致（`5b834ee871edbd45c3fb5e309021cf52890ea8a23c72dc6ba49b54f143a2703f`）。DSH 会话读取了其副本；Cowork 因该次目标目录未挂载而无法在沙箱内读取，文件存在和摘要由本机独立核对，未验证 Cowork 对该目录的直接访问。本轮未生成新图片或执行清理。
 
 v0.1.5 安装及 Desktop 验收：实际安装目录更新到正式版提交 `a08408bb5fc66d9514cb5bc8abccb996ff3b8514`；升级前后四个 SQLite 数据库逻辑内容、完整性及 7 个持久化配置和产物文件摘要一致，备份和脱敏账本保存在 `.cache/upgrade-v015/`。Claude Cowork、DSH Desktop 和重启后的 Codex Desktop 分别在实际会话调用 `export_image` 导出同一已有 PNG；Cowork 在已挂载工作区读取并打开副本，DSH 读取副本，Codex 返回目标文件路径。本机独立计算的三个副本 SHA-256 均与原件一致，为 `5b834ee871edbd45c3fb5e309021cf52890ea8a23c72dc6ba49b54f143a2703f`。升级时旧 Codex MCP 连接曾返回 `Transport closed`，重启 Codex 后调用成功。未生成新图片、未执行清理；本次会话验收使用已保存的 PNG，不代表新版本真实供应商生成测试。
+
+## v0.1.6 本地升级及 Desktop 验收
+
+2026-11-13，[v0.1.6 正式版](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/releases/tag/v0.1.6) 标签与 `main` 合并提交 `9acacfb57baaf2a370cb830aabb7654e1da7d8cd` 一致；[合并后 Windows CI](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/actions/runs/43407268248) 的完整测试为 285 通过、1 跳过，OpenSpec 主规范 10 项通过。实际安装目录 `D:\MCP\zhenzhen-gptimage2.6-mcp` 从 v0.1.5 切换至该提交，按锁文件安装后确认项目版本为 0.1.6。
+
+升级前检查 `claude`、`claude-code`、`codex`、`dsh` 和 `shared` 数据库，均无未完成任务且完整性检查通过；停止旧接入和后台后通过 SQLite backup API 备份数据库，并保留 `.env`、其 ACL 记录及运行数据。升级后核对 123 项备份文件对应的配置和运行文件摘要、数据库逻辑内容与完整性，均一致。回滚备份及清单位于 Git 忽略的 `.cache/upgrade-v016/`；备份含私有配置，不能公开。此为实际本地升级及数据保留检查，并未执行 v0.1.6 回滚演练。
+
+三个 Desktop 使用已配置的发布版启动目录和 `runtime-data/codex` 数据目录，分别在实际会话调用 `get_image` 和 `export_image`，导出同一已有任务 `ce52d5d4-b946-45ac-9329-bc39202377b9` 的 PNG：
+
+| Host | 本次验证结果 |
+| --- | --- |
+| Codex Desktop | 原会话的旧工具连接返回 `Transport closed`；用户新建会话后调用两个工具并打开导出图片，用户提供的截图显示成功。 |
+| Claude Desktop Cowork | 调用两个工具，将图片导出到已挂载测试工作区，并在 Cowork 文件查看器中打开。 |
+| DeepSeek Harness Desktop | 调用两个工具并导出成功；会话随后尝试用自身命令检查文件时，`grantWrite` 返回 `SetNamedSecurityInfoW failed (Win32 5)`，本机独立核对文件。该错误不等同于 MCP 导出失败。 |
+
+三个副本与原件均为 1,114,124 字节，独立计算的 SHA-256 均为 `5b834ee871edbd45c3fb5e309021cf52890ea8a23c72dc6ba49b54f143a2703f`。测试工作区中的三个临时副本经哈希核对后归档至 Git 忽略的 `.cache/v016-desktop-acceptance/`，并清理工作区副本；原任务图片及升级备份保留。本次未重新生成图片、未执行 MCP 产物清理或供应商收费生成验收；Host 使用现有模型服务，费用未核对。三个 Host 的本次验收仅覆盖已有 PNG 的查询和导出，不推断其他格式或新生图能力。
