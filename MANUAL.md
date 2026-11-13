@@ -1,6 +1,6 @@
 # zhenzhen-gptimage2.6-mcp 成员使用手册
 
-本手册适用于 [v0.1.5 正式版](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/releases/tag/v0.1.5)，标签提交为 `a08408bb5fc66d9514cb5bc8abccb996ff3b8514`。面向 Windows 成员；示例使用 PowerShell 和默认安装目录，使用其他目录时需同时修改安装、配置及命令中的路径。
+本手册适用于 [v0.1.6 正式版](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/releases/tag/v0.1.6)；安装前应核对该 Release 的标签与完整提交。面向 Windows 成员；示例使用 PowerShell 和默认安装目录，使用其他目录时需同时修改安装、配置及命令中的路径。
 
 ## 1. 环境准备
 
@@ -33,10 +33,12 @@ git --version
 ```powershell
 $ErrorActionPreference = 'Stop'
 $ProjectDir = 'D:/MCP/zhenzhen-gptimage2.6-mcp'
-$ExpectedCommit = 'a08408bb5fc66d9514cb5bc8abccb996ff3b8514'
+$Release = Invoke-RestMethod 'https://api.github.com/repos/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/releases/tags/v0.1.6'
+if ($Release.draft -or $Release.prerelease -or $Release.tag_name -cne 'v0.1.6' -or $Release.target_commitish -notmatch '^[0-9a-f]{40}$') { throw '正式 Release 或完整提交不可用。' }
+$ExpectedCommit = $Release.target_commitish
 if (Test-Path -LiteralPath $ProjectDir) { throw '安装目录已存在，请使用升级步骤。' }
 New-Item -ItemType Directory -Path (Split-Path -Parent $ProjectDir) -Force | Out-Null
-git clone --branch v0.1.5 --single-branch 'https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp.git' $ProjectDir
+git clone --branch v0.1.6 --single-branch 'https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp.git' $ProjectDir
 if ($LASTEXITCODE -ne 0) { throw '克隆失败。' }
 $ActualCommit = git -C $ProjectDir rev-parse HEAD
 if ($LASTEXITCODE -ne 0 -or $ActualCommit -cne $ExpectedCommit) { throw '标签提交不匹配，停止安装。' }
@@ -74,7 +76,7 @@ if ($LASTEXITCODE -ne 0) { throw '入口检查失败。' }
 
 输出应包含 `--config-dir`、`--env-file`、`--data-dir`。此命令不生图，也不验证 Host 或供应商。完成第 4 节后，在各客户端的新会话中请 Agent 调用 `get_capabilities`；这是本地能力查询，不提交供应商生图。然后可调用 `list_tasks`、`get_task` 或 `get_image` 查询已有任务。图像生成可能收费，只有用户需要并授权时才提交。
 
-v0.1.5 发布合并提交的 [Windows CI](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/actions/runs/42785369102) 为 285 通过、1 跳过。三个 Desktop 已分别使用发布版和已有 PNG 完成导出会话验收；不代表本轮重新验证了所有供应商模型或真实收费生成。证据见[验收记录](docs/artifact-retention-validation.md)。
+v0.1.5 发布合并提交的 [Windows CI](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/actions/runs/42785369102) 为 285 通过、1 跳过。三个 Desktop 曾分别使用 v0.1.5 和已有 PNG 完成导出会话验收；这不代表 v0.1.6 已重新完成三个 Desktop 会话或所有供应商模型的收费验证。证据见[验收记录](docs/artifact-retention-validation.md)。
 
 ## 4. 客户端配置
 
@@ -198,22 +200,24 @@ uv --directory 'D:/MCP/zhenzhen-gptimage2.6-mcp' run --no-sync python -m zhenzhe
 
 `ready` 为可连接，`not_available` 为未发现后台，`incompatible` 表示版本或配置不一致。Windows 后台通过 WMI 启动，并要求私有运行目录的所有者和 ACL 正确；失败时检查日志与权限，不要删除数据库或放宽访问控制。
 
-### 升级到 v0.1.5
+### 升级到 v0.1.6
 
 先记录并查询未完成任务，停止所有使用安装目录和数据目录的 MCP 接入与后台；不要因停止而重发结果未知的收费请求。备份 `.env`、其权限、全部数据目录、图片及 SQLite 数据；对数据库使用 [SQLite backup API](docs/database-maintenance.md)，保留备份及恢复所需文件。以下步骤不会替你执行备份；完成备份和停止后运行。工作树有已跟踪改动时停止，不覆盖私有文件。
 
 ```powershell
 $ErrorActionPreference = 'Stop'
 $ProjectDir = 'D:/MCP/zhenzhen-gptimage2.6-mcp'
-$ExpectedCommit = 'a08408bb5fc66d9514cb5bc8abccb996ff3b8514'
+$Release = Invoke-RestMethod 'https://api.github.com/repos/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/releases/tags/v0.1.6'
+if ($Release.draft -or $Release.prerelease -or $Release.tag_name -cne 'v0.1.6' -or $Release.target_commitish -notmatch '^[0-9a-f]{40}$') { throw '正式 Release 或完整提交不可用。' }
+$ExpectedCommit = $Release.target_commitish
 $Changes = git -C $ProjectDir status --porcelain
 if ($LASTEXITCODE -ne 0 -or $Changes) { throw '工作树不干净或无法读取，请先处理。' }
 $PreviousCommit = git -C $ProjectDir rev-parse HEAD
 if ($LASTEXITCODE -ne 0) { throw '无法读取当前版本。' }
 Write-Host "升级前提交：$PreviousCommit（请保存用于回滚）"
-git -C $ProjectDir fetch origin tag v0.1.5
+git -C $ProjectDir fetch origin tag v0.1.6
 if ($LASTEXITCODE -ne 0) { throw '获取标签失败。' }
-$TargetCommit = git -C $ProjectDir rev-parse 'refs/tags/v0.1.5^{commit}'
+$TargetCommit = git -C $ProjectDir rev-parse 'refs/tags/v0.1.6^{commit}'
 if ($LASTEXITCODE -ne 0 -or $TargetCommit -cne $ExpectedCommit) { throw '标签提交不匹配。' }
 git -C $ProjectDir switch --detach --no-overwrite-ignore $TargetCommit
 if ($LASTEXITCODE -ne 0) { throw '切换失败，请保留数据并检查。' }
