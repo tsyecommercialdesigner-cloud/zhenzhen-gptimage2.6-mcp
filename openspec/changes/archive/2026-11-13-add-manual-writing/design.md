@@ -26,6 +26,13 @@
 - 备选：只用 headless 或仅接受官方 API Key；不符合用户决定，也不足以替代实际 Desktop 证据。
 - 限制：这项文档决策不自动证明任何 Host、安装流程或 Sandbox 已验收通过。
 
+### ADR-003：DSH 子进程代理绕过列表兼容
+
+- 状态：已接受；适用范围为确认受影响的 DSH Desktop 0.2.1-rc.5 与本项目 httpx 0.28.1 组合，其他版本以实际验证为准。
+- 背景：DSH [代理策略源码](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/util/http-proxy/src/policy.ts)将 `::1` 与 `[::1]` 加入回环绕过列表；本机隔离复现表明 httpx 初始化时带方括号条目触发 `Invalid port: ':1]'`。上游 [Discussion #9606](https://github.com/deepseek-ai/deepseek-harness/discussions/9606) 与 [#8056](https://github.com/deepseek-ai/deepseek-harness/discussions/8056) 为用户问题报告，不代表官方已确认或修复；master 与本机版本不必然相同。
+- 决策：手册要求在 DSH MCP 的 `config.env` 示例中为 `NO_PROXY`、`no_proxy` 均设置 `localhost,127.0.0.1,::1`；已有其他绕过项时保留并在两字段一致合并，排除 `[::1]`。仅改变该 MCP 子进程的绕过列表，不覆盖其他服务、代理地址或凭据。
+- 验证边界：隔离 DSH 复测未再出现相同启动错误；真实 Desktop 的插件状态、工具发现和会话调用仍需实际验证。不得把本项配置说明写成上游已修复或 Host 验收已通过。
+
 ## Risks / Trade-offs
 
 - [实际实现与期望目录定位不一致] → 手册如实说明现有入口并单独规划修复，不能把目标写成现状。

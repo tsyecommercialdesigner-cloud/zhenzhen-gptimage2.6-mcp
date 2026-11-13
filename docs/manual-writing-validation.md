@@ -67,3 +67,20 @@ DSH 0.2.1-rc.5 本机内置 MCP 桥接代码保留 `structuredContent`，但模�
 2026-11-10 后续复测：用户将 Claude Code 用户配置的数据目录改为 `runtime-data/claude-code` 并重启 Claude Desktop，Desktop 配置继续使用 `runtime-data/claude`。重启后的真实 Desktop Code 会话发现并调用发布版 `get_capabilities`，返回 `ok: true` 和完整能力信息；未生成图片。该结果验证连接与只读调用，不代表修复版及图片展示验收通过。
 
 DSH 预览对照：会话记录显示模型此前生成的 Markdown 使用无扩展名的 DSH 附件对象路径；本机 DSH 文件服务按扩展名推断 MIME，未知时返回 `application/octet-stream` 并设置 `nosniff`。要求会话直接使用该任务已保存的 `.png` 原件路径后，Desktop 实际显示红色杯子图片。该对照证实有扩展名的原件路径可显示；修复版能否让模型自行获取和使用原件路径仍须实际验收，未产生新生图费用。
+
+2026-11-10 发布升级：PR #2 合入提交 `2522d96ca931b08b31ba84490909c4ab6e91a7da`，该提交隔离安装、OpenSpec 严格校验及 193 项测试通过，仓库未配置 CI。[v0.1.1 预发布](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/releases/tag/v0.1.1) 标签指向同一提交。停止相关 MCP 实例后，目标安装目录切换到该提交并执行锁定非开发依赖安装；升级前通过 SQLite backup API 备份四个数据库，升级后逻辑内容和完整性一致，两个已有图片哈希及 `.env` 不存在的状态保持不变。备份和脱敏清单保存在 Git 忽略的 `.cache/upgrade-v011-20261110/`。三个 Desktop 的 v0.1.1 会话验收等待重启复测。
+
+### v0.1.1 Desktop 会话复测
+
+2026-11-10 重启后，安装目录仍为上述合入提交，三个 Host 均使用已配置的发布安装目录和独立数据目录：
+
+- Codex 当前会话调用 `get_image` 读取先前成功的蓝杯任务；返回文本 JSON、原件路径及图片内容块。用户最初未看到工具调用；重试同一只读查询后，用户确认并以截图证明工具结果直接显示了蓝杯图片及文本、结构化结果，没有重新生图。
+- DSH Desktop 0.2.1-rc.5 会话调用 `get_image` 读取先前红杯任务；模型报告 PNG 原件路径及哈希，并在回复中展示了红杯图片。未新提交生图。
+- Claude Desktop 4.23118.1.0 的 Code 会话通过 MCP 生成绿杯，数据库记录任务成功、尝试一次，原件存在且哈希与数据库相符；Desktop 会话中观察到图片及原件路径。使用此前授权的三个 Host 各一次额度中的 Claude 一次，实际账单未核对。该 Code 会话使用 `runtime-data/claude-code`。
+- 同时 Claude Desktop 在本轮仍提示 `zhenzhen-gptimage2-6 couldn’t start for Cowork and Code sessions`；实际 `Claude-3p` MCP 日志于 13:11:27（北京时间）再次记录共享连接池启动失败及 `data directory is already in use`。当前可用的 Code 会话不能证明共享连接池或 Cowork 已恢复；`runtime-data/claude` 仍有 Desktop 子进程运行，重复启动来源尚待定位。不得宣称 Claude 启动问题已完全修复。
+
+2026-11-10 Cowork 优先复测：在独立测试工作区新建 Cowork 会话，请求仅调用 `get_capabilities`；会话报告目标服务及该工具未挂载，未发生目标工具调用或生图。日志于 13:23:22（北京时间）再次记录 `shared-pool` 启动失败和 `data directory is already in use`，同时可观察到 Claude Desktop 子进程使用 `runtime-data/claude`。这些现象支持目录锁冲突与本次失败有关，但尚未证明所有重复启动的内部路径。Cowork 图片展示和原件定位仍未验收。
+
+同日升级至已发布的 v0.1.2、用户更新配置并重启后，三个 Desktop 均以安装目录和同一数据目录完成实际 `get_image` 调用、原件定位和图片展示；Cowork 工具预览可打开，DSH 会话展示原件对应的蓝杯，Codex 工具图片经用户确认可见。详细版本、共享后台、预览限制及无新增供应商生成费用见[共享后台验证记录](shared-backend-validation.md)。Host 的会话模型服务可能产生费用，本轮未核对账单；此次只读验收不证明真实供应商并发和故障恢复。
+
+本轮 Codex 与 DSH 查询没有重新收费，Claude 生成一次；各 Host 对话模型可能另有费用。最终任务仍须处理 Claude 共享连接池故障，不因单个 Code 会话成功掩盖启动失败提示。
