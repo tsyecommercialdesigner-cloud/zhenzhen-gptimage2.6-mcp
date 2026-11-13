@@ -1,84 +1,248 @@
-# 成员使用手册
+# zhenzhen-gptimage2.6-mcp 成员使用手册
 
-> 本工作树包含尚未发布的共享后台实现，下文关于共享后台的说明适用于包含该变更的版本；v0.1.1 不具备此能力。发布版及 Desktop 验收状态以 [验收记录](docs/manual-writing-validation.md) 为准。
+本手册适用于 [v0.1.5 正式版](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/releases/tag/v0.1.5)，标签提交为 `a08408bb5fc66d9514cb5bc8abccb996ff3b8514`。面向 Windows 成员；示例使用 PowerShell 和默认安装目录，使用其他目录时需同时修改安装、配置及命令中的路径。
 
 ## 1. 环境准备
 
-本手册面向使用 MCP 的成员。Windows 默认安装目录为 `D:\MCP\zhenzhen-gptimage2.6-mcp`；其他位置可用，但以下命令和 Host 配置的路径必须一致。需要 Git、uv、Python 3.12.14、可访问 GitHub 和 t8-star 的网络、磁盘空间，以及可登录的目标 Desktop Host。Python 与依赖由项目锁文件约束；uv 需能运行 `uv sync --locked`。请根据实际 Host 安装及模型服务条件配置，Host 对话模型的账号或 codeproxy 与本 MCP 的 t8-star 凭据互不相同。
+本服务运行在本机，通过 stdio 连接 Agent；不需要另行部署 HTTP 服务。准备 Windows、Git、uv（已验证 0.12.9）、Python 3.12.14、可访问 GitHub 和 PyPI 的网络，以及 t8-star 图像服务的有效密钥。uv 可按项目 `.python-version` 下载精确 Python。Claude / Codex / DSH 的登录或对话模型渠道与本服务的图像供应商密钥分别配置。
 
-仓库：[zhenzhen-gptimage2.6-mcp](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp)；发行包名 `zhenzhen-gptimage2-6-mcp`，Python 模块 `zhenzhen_gptimage`，可执行入口 `zhenzhen-gptimage`，MCP 服务名 `zhenzhen-gptimage-2.6`，传输方式为 stdio。[v0.1.0 预发布](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/releases/tag/v0.1.0) 对应提交 `7d60bde04479c51deba4a82aa3084e7ea1a0fd72`；安装时仍需自行核对标签与 SHA。隔离锁定安装解析出 FastMCP 2.14.7 和 MCP Python SDK 1.30.0；具体版本以目标 Release 锁文件为准，协议协商版本与包版本分别确定。
+| 项目 | 值 |
+| --- | --- |
+| 项目目录 | `D:/MCP/zhenzhen-gptimage2.6-mcp` |
+| 仓库 | [zhenzhen-gptimage2.6-mcp](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp) |
+| 包名 / Python 模块 | `zhenzhen-gptimage2-6-mcp` / `zhenzhen_gptimage` |
+| 命令 / Host 别名 | `zhenzhen-gptimage` / `zhenzhen-gptimage2-6` |
+| 服务名称 / 传输 | `zhenzhen-gptimage-2.6` / 本地 stdio |
+| 供应商 / 密钥变量 | `https://ai.t8star.org` / `ZHENZHEN_GPTIMAGEGEN_API_KEY` |
+| 运行依赖 | FastMCP 2.14.7、MCP SDK 1.30.0；以锁文件为准 |
+
+先在 PowerShell 检查工具；若 `uv` 无法发现，请安装 uv 并确保 Desktop 进程的 PATH 可以找到它：
+
+```powershell
+Get-Command git, uv -ErrorAction Stop | Select-Object Name, Source
+uv --version
+git --version
+```
 
 ## 2. 项目初始化
 
-在 [Releases](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/releases) 核对标签及其完整提交 SHA，替换下方占位符；若尚无经验证的发行版本，应等待验收结果。默认目录已有内容时先检查，不要覆盖。项目不要求 ZIP 分发。
+### 首次安装
+
+以下可从任意 PowerShell 目录执行；若目标目录已存在，命令会停止，请使用第 5 节升级步骤。不会覆盖已有文件或配置。
 
 ```powershell
-git clone --branch '<已验证标签>' --single-branch https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp.git D:/MCP/zhenzhen-gptimage2.6-mcp
-Set-Location D:/MCP/zhenzhen-gptimage2.6-mcp
-git rev-parse HEAD
-uv sync --locked --no-dev
-if (-not (Test-Path -LiteralPath .env)) { Copy-Item -LiteralPath .env.example -Destination .env }
+$ErrorActionPreference = 'Stop'
+$ProjectDir = 'D:/MCP/zhenzhen-gptimage2.6-mcp'
+$ExpectedCommit = 'a08408bb5fc66d9514cb5bc8abccb996ff3b8514'
+if (Test-Path -LiteralPath $ProjectDir) { throw '安装目录已存在，请使用升级步骤。' }
+New-Item -ItemType Directory -Path (Split-Path -Parent $ProjectDir) -Force | Out-Null
+git clone --branch v0.1.5 --single-branch 'https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp.git' $ProjectDir
+if ($LASTEXITCODE -ne 0) { throw '克隆失败。' }
+$ActualCommit = git -C $ProjectDir rev-parse HEAD
+if ($LASTEXITCODE -ne 0 -or $ActualCommit -cne $ExpectedCommit) { throw '标签提交不匹配，停止安装。' }
+uv --directory $ProjectDir sync --locked --no-dev
+if ($LASTEXITCODE -ne 0) { throw '安装依赖失败。' }
 ```
 
-核对输出 SHA 与 Release 声明一致。在 `.env` 中为 `ZHENZHEN_GPTIMAGEGEN_API_KEY` 填入自己的 t8-star 密钥，限制文件访问权限，不提交、截图或粘贴密钥。已有 `.env` 保留；若使用环境变量，需从 `.env` 删除此字段，不能留空。读取优先级及错误规则见[配置说明](docs/configuration.md)。密钥改变后重启 MCP 进程。
+独立 `.venv` 由 uv 创建；日常启动使用 `--no-sync`。项目通过 GitHub Releases 发布，不需要成员下载 ZIP。
+
+### 设置密钥
+
+下面仅在 `.env` 不存在时复制空模板，然后打开编辑器；不会读取或打印密钥。
+
+```powershell
+$ProjectDir = 'D:/MCP/zhenzhen-gptimage2.6-mcp'
+$EnvPath = Join-Path $ProjectDir '.env'
+if (-not (Test-Path -LiteralPath $EnvPath)) {
+  [IO.File]::Copy((Join-Path $ProjectDir '.env.example'), $EnvPath, $false)
+}
+notepad.exe $EnvPath
+```
+
+在文件中填写 `ZHENZHEN_GPTIMAGEGEN_API_KEY=你的密钥`，以 UTF-8 保存；请勿把真实密钥放进配置示例、聊天、日志或 Git。`.env` 是私有文件，确保只有运行服务的用户和必要管理员可读写。已有 `.env` 保留并仅合并字段。
+
+密钥按项目 `.env`、进程环境、Windows 用户级环境的顺序读取；只有文件或字段缺失才回退。若要使用用户级环境变量，删除 `.env` 中的密钥字段，不能保留空值。已定义为空、重复或非法时启动报错，不会回退。配置读取规则见[本地配置](docs/configuration.md)。
 
 ## 3. 可用性测试
 
-安装后在 PowerShell 中检查入口：
+在 PowerShell 检查已安装入口：
 
 ```powershell
-uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync zhenzhen-gptimage --help
+uv --directory 'D:/MCP/zhenzhen-gptimage2.6-mcp' run --no-sync zhenzhen-gptimage --help
+if ($LASTEXITCODE -ne 0) { throw '入口检查失败。' }
 ```
 
-预期显示 `--config-dir`、`--env-file` 和 `--data-dir`，退出码为 0。此检查不连接供应商，也不验证 MCP 协议或 Desktop 会话。连接 Host 后用 `get_capabilities` 检查工具可用性；其成功不证明供应商生图可用。服务正常启动后等待 stdio 请求，无交互式提示；不要向其标准输出写入诊断内容。生成期限为 600 秒，Host 超时应略长于该期限。
+输出应包含 `--config-dir`、`--env-file`、`--data-dir`。此命令不生图，也不验证 Host 或供应商。完成第 4 节后，在各客户端的新会话中请 Agent 调用 `get_capabilities`；这是本地能力查询，不提交供应商生图。然后可调用 `list_tasks`、`get_task` 或 `get_image` 查询已有任务。图像生成可能收费，只有用户需要并授权时才提交。
+
+v0.1.5 发布合并提交的 [Windows CI](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/actions/runs/42785369102) 为 285 通过、1 跳过。三个 Desktop 已分别使用发布版和已有 PNG 完成导出会话验收；不代表本轮重新验证了所有供应商模型或真实收费生成。证据见[验收记录](docs/artifact-retention-validation.md)。
 
 ## 4. 客户端配置
 
-安装依赖后，Host 使用以下等价的 stdio 命令和独立数据目录；不要在每次启动时安装依赖。指定 `--config-dir` 是必要的：未指定时当前实现使用 Host 进程的工作目录，并不自动定位安装目录。
+以下三种配置使用相同的 `runtime-data/shared`，因此共享任务、幂等记录、模板和队列；配置目录、密钥、限制和版本也须一致。如果需要不同历史，可分别改成不同数据目录。示例目录用于新安装；已有用户应保留实际数据目录，避免误以为旧历史丢失。所有路径均为 **运行 MCP 的本机路径**，不是 Agent 的虚拟沙箱路径。
 
-```text
-uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync zhenzhen-gptimage --config-dir D:/MCP/zhenzhen-gptimage2.6-mcp --data-dir D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/codex
+先备份待编辑的 Host 配置，只合并本服务，保留其他服务和登录信息。示例中的 `uv` 需能从 Host 的 PATH 找到；如果客户端找不到命令，使用 `Get-Command uv | Select-Object -ExpandProperty Source` 查询绝对路径并替换 `command`。修改后完全重启对应 Desktop，在会话中检查工具发现和 `get_capabilities`。
+
+### Codex Desktop
+
+在用户配置 `C:/Users/<用户名>/.codex/config.toml`（也可使用项目 `.codex/config.toml`）合并下面的表；已有同名表则修改该表，不要重复添加。
+
+```toml
+[mcp_servers.zhenzhen-gptimage2-6]
+command = "uv"
+args = [
+  "--directory", "D:/MCP/zhenzhen-gptimage2.6-mcp",
+  "run", "--no-sync", "zhenzhen-gptimage",
+  "--config-dir", "D:/MCP/zhenzhen-gptimage2.6-mcp",
+  "--data-dir", "D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/shared"
+]
+startup_timeout_sec = 30
+tool_timeout_sec = 630
 ```
 
-在每个 Host 的 MCP 配置中添加服务时保留已有条目与认证；使用 `command: uv` 和按空格拆分的参数数组，路径含空格时每个路径仍为一个数组项。支持共享后台的版本允许多个 stdio 接入进程使用相同 `--data-dir`，共享任务、图片、幂等记录和模板，并由一个后台统一执行队列上限；须同时使用兼容的版本、配置目录、凭据和限制。不同数据目录仍各自隔离。旧版 v0.1.1 的同一数据目录只能有一个 Server 实例；不得与新版后台同时占用同一目录。按所用 Host 版本的界面和配置机制合并、启用配置，重启其 MCP 进程或客户端，再分别检查连接、工具发现、会话调用及图片显示；配置成功不等于会话验收成功。具体示例见[Host 配置说明](docs/host-setup.md)。
+保存后重启 Codex Desktop；CLI 可查询注册状态：
 
-以下为通用的 JSON 服务条目示例，具体外层结构和可用性须由对应 Desktop 版本确认；不要用它覆盖整个已有配置：
+```powershell
+codex mcp get zhenzhen-gptimage2-6
+```
+
+配置存在不等于会话工具可用。此前本机 v0.1.5 的 Codex 会话已成功调用 `export_image`，并核对副本摘要；如 Host 尚未刷新工具列表，重启后再查。
+
+### Claude Desktop Cowork
+
+本机已验证的配置位置是 `%LOCALAPPDATA%/Claude-3p/claude_desktop_config.json`。在已有 JSON 的 `mcpServers` 对象中合并以下**单个服务条目**，保留其他键；如果该对象当前为空，下方完整 JSON 可直接作为文件内容。实际客户端版本的配置位置以其设置界面为准。不要用此完整示例覆盖已有其他服务。
 
 ```json
 {
-  "command": "uv",
-  "args": ["--directory", "D:/MCP/zhenzhen-gptimage2.6-mcp", "run", "--no-sync", "zhenzhen-gptimage", "--config-dir", "D:/MCP/zhenzhen-gptimage2.6-mcp", "--data-dir", "D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/codex"]
+  "mcpServers": {
+    "zhenzhen-gptimage2-6": {
+      "command": "uv",
+      "args": [
+        "--directory", "D:/MCP/zhenzhen-gptimage2.6-mcp",
+        "run", "--no-sync", "zhenzhen-gptimage",
+        "--config-dir", "D:/MCP/zhenzhen-gptimage2.6-mcp",
+        "--data-dir", "D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/shared"
+      ]
+    }
+  }
 }
 ```
 
-验收记录见[本次手册验收](docs/manual-writing-validation.md)和[Host 会话验证](docs/host-session-validation.md)。当前 Codex Desktop 曾观察到本项目图片内容块；Claude Desktop 和 DeepSeek Harness Desktop 对本项目的完整实际会话与图片展示尚未完成验证。DSH Desktop 已发现并调用 `get_capabilities`，但会话仅收到“完成”，能力数据未见返回；原因尚待核实。各 Host 的 UI、版本及模型渠道以实际验收为准，不能用其他客户端代替。
+用下面命令打开当前用户的文件；文件不存在时先在 Claude Desktop 中初始化设置，不要覆盖其他配置：
 
-对于受影响的 DeepSeek Harness Desktop 0.2.1-rc.5 与 httpx 0.28.1 组合，在此 MCP 服务的 `config` 下合并以下字段：
-
-```yaml
-env:
-  NO_PROXY: "localhost,127.0.0.1,::1"
-  no_proxy: "localhost,127.0.0.1,::1"
+```powershell
+$ClaudeConfig = Join-Path $env:LOCALAPPDATA 'Claude-3p/claude_desktop_config.json'
+if (-not (Test-Path -LiteralPath $ClaudeConfig -PathType Leaf)) { throw "找不到配置文件：$ClaudeConfig" }
+notepad.exe $ClaudeConfig
 ```
 
-若已有其他绕过地址，将其保留并一致地追加到两个字段，移除 `[::1]`；不要覆盖其他服务、代理地址或凭据。这只影响该 MCP 子进程。重启后检查插件状态与 `get_capabilities`；当前隔离验证不能代替真实 Desktop 复测，其他版本以实际验证为准。完整配置层级见 [DSH overlay 示例](docs/host-setup.md#deepseek-harness)。
+保存后完全退出并重启 Claude Desktop，进入 Cowork，在独立工作区中检查服务和工具。v0.1.5 本机 Cowork 已调用导出并打开工作区副本。MCP 可写到服务账号有权限的本机目录，但 Cowork 只有在目标目录已加入会话时才能直接读取该副本；如两者路径映射不同，请用户提供本机路径，不要猜测。
+
+Claude Code 使用自己的项目或用户配置，与 Desktop 配置分别管理；如也使用 Code，请按实际作用域单独合并相同服务启动参数。v0.1.5 本轮未重新验收 Claude Code 会话。
+
+### DeepSeek Harness Desktop
+
+本机 Desktop 的配置位于 `C:/Users/<用户名>/.dsh/profiles/desktop/cordis.patch.yml`；若设置了 `DSH_HOME`，以其为根目录。文件为 YAML 顶层列表：已有其他 patch 时将下面的 `- insert:` 条目合并到同一列表；若已有同 ID 服务则修改该条目，勿重复。仅当文件内容为 `[]` 时可用下面完整示例替换。
+
+```yaml
+- insert:
+    - id: mcp-zhenzhen-gptimage2-6
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: zhenzhen-gptimage2-6
+        transport: stdio
+        command: uv
+        env:
+          NO_PROXY: "localhost,127.0.0.1,::1"
+          no_proxy: "localhost,127.0.0.1,::1"
+        args:
+          - --directory
+          - D:/MCP/zhenzhen-gptimage2.6-mcp
+          - run
+          - --no-sync
+          - zhenzhen-gptimage
+          - --config-dir
+          - D:/MCP/zhenzhen-gptimage2.6-mcp
+          - --data-dir
+          - D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/shared
+        toolCallTimeoutMs: 630000
+        failOnStartupError: true
+```
+
+打开实际 Desktop patch：
+
+```powershell
+$DshRoot = if ([string]::IsNullOrWhiteSpace($env:DSH_HOME)) { Join-Path $env:USERPROFILE '.dsh' } else { $env:DSH_HOME }
+$DshConfig = Join-Path $DshRoot 'profiles/desktop/cordis.patch.yml'
+if (-not (Test-Path -LiteralPath $DshConfig -PathType Leaf)) { throw "找不到配置文件：$DshConfig" }
+notepad.exe $DshConfig
+```
+
+DSH 0.2.1-rc.5 与 httpx 的已观察兼容问题可能让 `[::1]` 触发 `Invalid port: ':1]'`；上述两个字段仅作用于此 MCP 子进程。如已有其他绕过地址，保留并在两个字段一致合并，移除 `[::1]`，不要覆盖其他代理或服务。重启 DSH Desktop，检查插件运行状态，再在会话调用 `get_capabilities`。本机 v0.1.5 DSH 已实际调用导出并读取副本；其他 DSH profile 未在本轮验收。
 
 ## 5. 启动排障、升级与回滚
 
-先检查绝对路径、uv 可执行文件、锁定安装、密钥来源和各 Host 的 stderr；stdio stdout 必须留给协议。配置错误、空密钥和数据目录锁冲突应修正后重启，不能盲目删除数据库。升级前记录旧标签与完整 SHA，检查 `git status`，停止所有使用该数据目录的 Server，保护 `.env`、权限、数据库、图片及私有配置。按[数据库维护](docs/database-maintenance.md)用 SQLite backup API 创建一致性备份，并验证完整性。
+### 日常启动与后台状态
 
-共享后台版本可在 PowerShell 中检查或有序停止指定目录的后台；将路径替换为该 Host 的实际配置：
+Host 通常自动启动服务。手工启动后等待 stdio 请求是正常现象，标准输出用于协议；不要把日志写入 stdout。
 
 ```powershell
-uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync python -m zhenzhen_gptimage.mcp_api.backend_control status --config-dir D:/MCP/zhenzhen-gptimage2.6-mcp --data-dir D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/codex
-uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync python -m zhenzhen_gptimage.mcp_api.backend_control stop --config-dir D:/MCP/zhenzhen-gptimage2.6-mcp --data-dir D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/codex
+uv --directory 'D:/MCP/zhenzhen-gptimage2.6-mcp' run --no-sync zhenzhen-gptimage --config-dir 'D:/MCP/zhenzhen-gptimage2.6-mcp' --data-dir 'D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/shared'
 ```
 
-`status` 的 `ready` 表示后台握手成功；`not_available` 表示没有可连接后台，`incompatible` 表示正在运行的后台与当前配置或版本不兼容。`stop` 表示已请求有序停止，等待在途任务的宽限期最多 30 秒，状态持久化与资源关闭可能继续。停止所有接入客户端后再检查数据目录已释放，才能升级或回滚。若后台不可用，检查配置、私有运行目录权限和旧版进程占用；不要删除 `server.lock`、数据库或图片。旧版 v0.1.1 不支持此管理命令；其目录锁冲突需停止占用进程，或使用不同数据目录并接受历史隔离。
+下面查询后台；先停止全部使用该目录的 Host 接入进程，再运行停止命令。`stopping` 表示请求已接收，必要的持久化和资源关闭可能继续；等待完成后才能升级。不同数据目录需分别检查。
 
-后台发现信息位于数据目录 `.shared-backend/`，只允许当前用户访问：Windows 需要受限 ACL，POSIX 系统需要目录模式 `0700` 和文件模式 `0600`。Windows 后台通过本机 WMI 隐藏启动，WMI 不可用或权限不足时会报启动错误；需要凭据及代理的环境变量经本机内存传递，密钥不会写入启动参数。权限不符合要求时服务会拒绝使用，不要放宽权限。修改密钥、配置目录或版本后，如提示不兼容，先停止旧接入与后台，再使用新配置启动；不要复制或公开发现文件中的令牌。
+```powershell
+uv --directory 'D:/MCP/zhenzhen-gptimage2.6-mcp' run --no-sync python -m zhenzhen_gptimage.mcp_api.backend_control status --config-dir 'D:/MCP/zhenzhen-gptimage2.6-mcp' --data-dir 'D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/shared'
+uv --directory 'D:/MCP/zhenzhen-gptimage2.6-mcp' run --no-sync python -m zhenzhen_gptimage.mcp_api.backend_control stop --config-dir 'D:/MCP/zhenzhen-gptimage2.6-mcp' --data-dir 'D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/shared'
+```
 
-核实目标 Release 的标签和 SHA 后，在干净工作树切换到该版本，执行 `uv sync --locked --no-dev`，重新执行本节及第 3、4 节检查。回滚前保存升级后的数据库和图片；schema v2 不能由旧版 v1 程序直接打开。回滚必须恢复并验证迁移前的 v1 备份，旧备份不会包含升级后的任务。不要将切换代码等同于回滚数据；无兼容备份时停止并保留原件。
+`ready` 为可连接，`not_available` 为未发现后台，`incompatible` 表示版本或配置不一致。Windows 后台通过 WMI 启动，并要求私有运行目录的所有者和 ACL 正确；失败时检查日志与权限，不要删除数据库或放宽访问控制。
+
+### 升级到 v0.1.5
+
+先记录并查询未完成任务，停止所有使用安装目录和数据目录的 MCP 接入与后台；不要因停止而重发结果未知的收费请求。备份 `.env`、其权限、全部数据目录、图片及 SQLite 数据；对数据库使用 [SQLite backup API](docs/database-maintenance.md)，保留备份及恢复所需文件。以下步骤不会替你执行备份；完成备份和停止后运行。工作树有已跟踪改动时停止，不覆盖私有文件。
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$ProjectDir = 'D:/MCP/zhenzhen-gptimage2.6-mcp'
+$ExpectedCommit = 'a08408bb5fc66d9514cb5bc8abccb996ff3b8514'
+$Changes = git -C $ProjectDir status --porcelain
+if ($LASTEXITCODE -ne 0 -or $Changes) { throw '工作树不干净或无法读取，请先处理。' }
+$PreviousCommit = git -C $ProjectDir rev-parse HEAD
+if ($LASTEXITCODE -ne 0) { throw '无法读取当前版本。' }
+Write-Host "升级前提交：$PreviousCommit（请保存用于回滚）"
+git -C $ProjectDir fetch origin tag v0.1.5
+if ($LASTEXITCODE -ne 0) { throw '获取标签失败。' }
+$TargetCommit = git -C $ProjectDir rev-parse 'refs/tags/v0.1.5^{commit}'
+if ($LASTEXITCODE -ne 0 -or $TargetCommit -cne $ExpectedCommit) { throw '标签提交不匹配。' }
+git -C $ProjectDir switch --detach --no-overwrite-ignore $TargetCommit
+if ($LASTEXITCODE -ne 0) { throw '切换失败，请保留数据并检查。' }
+uv --directory $ProjectDir sync --locked --no-dev
+if ($LASTEXITCODE -ne 0) { throw '依赖安装失败，请先检查或回滚。' }
+uv --directory $ProjectDir run --no-sync zhenzhen-gptimage --help
+if ($LASTEXITCODE -ne 0) { throw '入口复验失败。' }
+```
+
+重新启动 Host 并分别调用 `get_capabilities` 和已有任务查询。数据库可能跨版本迁移：v1→v2、v2→v3 时会建立相应备份；旧版不能直接读取较新的 schema。回滚前先保存升级后的数据库和图片，只有确认旧版兼容或具备经过验证的迁移前备份时，才切换回先前记录的提交并重新 `uv sync --locked --no-dev`；恢复旧备份不会带回备份之后的任务。不要使用 `git reset --hard`、`git clean -fdx` 或删除数据库绕过检查。
+
+确认上述数据库兼容或完成经过验证的恢复后，可在服务停止状态下执行以下代码回退程序；它不会自动恢复数据库：
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$ProjectDir = 'D:/MCP/zhenzhen-gptimage2.6-mcp'
+$RollbackCommit = Read-Host '输入升级前记录的完整提交 SHA'
+if ($RollbackCommit -notmatch '^[0-9a-fA-F]{40}$') { throw '需要完整的 40 位提交 SHA。' }
+$Changes = git -C $ProjectDir status --porcelain
+if ($LASTEXITCODE -ne 0 -or $Changes) { throw '工作树不干净或无法读取，请先处理。' }
+git -C $ProjectDir switch --detach --no-overwrite-ignore $RollbackCommit
+if ($LASTEXITCODE -ne 0) { throw '代码回滚失败。' }
+uv --directory $ProjectDir sync --locked --no-dev
+if ($LASTEXITCODE -ne 0) { throw '回滚依赖安装失败。' }
+uv --directory $ProjectDir run --no-sync zhenzhen-gptimage --help
+if ($LASTEXITCODE -ne 0) { throw '回滚入口检查失败。' }
+```
+
+恢复数据库前请按 [数据库维护](docs/database-maintenance.md)核对版本及备份；其中早期“开发版本尚未发布”的表述属于历史状态，v0.1.5 已包含 schema v3。
 
 ## 6. 文件清单
 
@@ -97,8 +261,8 @@ uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync python -m zhenzhen_
 | `get_task` / `list_tasks` | 按任务 ID 或幂等键查询；列表支持状态、批次、模型、时间及分页筛选。 |
 | `get_image` | `task_id`、`image_index`、`include_preview`，获取路径和可用预览。 |
 | `export_image` | `task_id`、`image_index`、`destination`，将原件复制到指定的本机文件路径。 |
-| `preview_cleanup` / `authorize_cleanup` / `execute_cleanup` | 开发版本：预览、请求用户确认、执行具体计划；尚未发布及完成 Desktop 验收。 |
-| `get_retention_policy` / `set_retention_policy` | 开发版本：查询或修改 90 天自动清理策略；启用须用户确认。 |
+| `preview_cleanup` / `authorize_cleanup` / `execute_cleanup` | 预览、请求用户确认、执行具体计划。 |
+| `get_retention_policy` / `set_retention_policy` | 查询或修改 90 天自动清理策略；启用须用户确认。 |
 | `recover_task` | `task_id`，恢复同一任务，不新建生成。 |
 | `accept_gif_size` | `task_id`、`sha256`、实际 `width` 和 `height`，接受待确认 GIF。 |
 | `close_task` | `task_id`、`expected_status`、`reason`；仅处理允许结案的状态。 |
@@ -110,22 +274,50 @@ Resources：`gptimage://capabilities`、`gptimage://prompt-guide`、`gptimage://
 
 可先让 Agent 依据资源和实际商品事实优化提示词，再提交单项或批量请求。每项需唯一 `idempotency_key`、`family`（`flare` 或 `sunburst`），并且 `prompt` 与 `template_code` 二选一。普通图像的 `images`、`flux` 通道需宽高；`chat` 不接受自定义宽高，尺寸由供应商决定。默认通道 `images`；模型按宽高和 family 路由，`explicit_model` 必须与路由一致。参考图使用 `references` 中的本地 `local_path`，最多 4 张；Flux 不支持参考图。模板可传 `template_variables`。
 
-`export_image` 的 `destination` 可使用用户指定的服务器本机绝对文件路径，无须预先设置导出目录；扩展名须与原件一致，已有文件不会覆盖。返回目标路径、类型、字节数及 SHA-256。GIF 和 SVG 按原字节复制。Cowork 内的沙箱路径不一定是 Windows 本机路径，若无法确定对应关系，应由用户提供本机工作区路径；不可自行猜测。v0.1.3 及更早版本仍要求配置导出根目录。
+### 单张生成和查询示例
 
-开发版本支持手动清理：先调用 `preview_cleanup`，提供带时区的 `before` 日期时间，或提供 `keep_latest` 保留最新数量，两者选择一个。预览包含计划 ID、到期时间、候选文件及大小、摘要和跳过原因；确认前不会删除。用户逐项审查后，可由支持 MCP 交互确认的 Host 调用 `authorize_cleanup` 并在确认界面批准，再调用 `execute_cleanup`。若 Host 不支持交互确认，用户可在本机终端执行以下命令，查看完整清单后按提示输入 `APPROVE` 和计划 ID，随后让 Agent 调用 `execute_cleanup`：
+以下是 `generate_image` 的工具参数，可交给支持工具参数的 Agent；它会向供应商提交生成请求并可能收费，请在明确需要时使用。`idempotency_key` 是此示例请求的稳定标识：再次使用相同内容可查询或复用，新的绘图需求应使用新的唯一值。
 
-```powershell
-uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync python -m zhenzhen_gptimage.mcp_api.backend_control approve-cleanup --config-dir D:/MCP/zhenzhen-gptimage2.6-mcp --data-dir D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/codex --plan-id <计划ID>
+```json
+{
+  "request": {
+    "idempotency_key": "example-blue-mug-001",
+    "family": "flare",
+    "channel": "images",
+    "prompt": "一只无品牌蓝色陶瓷马克杯，白色背景，无文字。",
+    "width": 1024,
+    "height": 1024
+  }
+}
 ```
 
-实际运行时将 `<计划ID>` 替换为预览返回的 ID。计划有效期为 10 分钟，后台重启后失效；每个计划只能执行一次，变化的文件会跳过。候选可能包含已完成任务的托管原件，以及在该任务所有原件均符合清理条件时，可核验且不再供其他任务使用的供应商响应、响应清单和参考图快照；预览会列出每个具体文件。任务历史、未完成任务和工作区导出副本保留；无法核验或归属不明的文件保留。中断后如结果不明，历史返回 `cleanup_uncertain`，需检查清理账本及备份，不能自动重试删除。
+随后调用 `get_task`，可直接使用相同幂等键查询，不创建新任务：
+
+```json
+{
+  "idempotency_key": "example-blue-mug-001"
+}
+```
+
+任务成功后调用 `get_image` 查询原件路径和预览；也可将该路径提供给 Agent，或使用 `export_image` 将原件复制到指定目录。请以工具返回的任务 ID 和实际 `local_path` 为准；不同 Host 可能展示预览副本。
+
+`export_image` 的 `destination` 可使用用户指定的服务器本机绝对文件路径，无须预先设置导出目录；扩展名须与原件一致，已有文件不会覆盖。返回目标路径、类型、字节数及 SHA-256。GIF 和 SVG 按原字节复制。Cowork 内的沙箱路径不一定是 Windows 本机路径，若无法确定对应关系，应由用户提供本机工作区路径；不可自行猜测。v0.1.3 及更早版本仍要求配置导出根目录。
+
+支持手动清理：先调用 `preview_cleanup`，提供带时区的 `before` 日期时间，或提供 `keep_latest` 保留最新数量，两者选择一个。预览包含计划 ID、到期时间、候选文件及大小、摘要和跳过原因；确认前不会删除。用户逐项审查后，可由支持 MCP 交互确认的 Host 调用 `authorize_cleanup` 并在确认界面批准，再调用 `execute_cleanup`。若 Host 不支持交互确认，用户可在本机终端执行以下命令，查看完整清单后按提示输入 `APPROVE` 和计划 ID，随后让 Agent 调用 `execute_cleanup`：
+
+```powershell
+$PlanId = Read-Host '输入 preview_cleanup 返回的计划 ID'
+uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync python -m zhenzhen_gptimage.mcp_api.backend_control approve-cleanup --config-dir D:/MCP/zhenzhen-gptimage2.6-mcp --data-dir D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/shared --plan-id $PlanId
+```
+
+命令提示输入预览返回的计划 ID；如果 Host 使用其他数据目录，须先将命令中的 `shared` 改为实际目录。计划有效期为 10 分钟，后台重启后失效；每个计划只能执行一次，变化的文件会跳过。候选可能包含已完成任务的托管原件，以及在该任务所有原件均符合清理条件时，可核验且不再供其他任务使用的供应商响应、响应清单和参考图快照；预览会列出每个具体文件。任务历史、未完成任务和工作区导出副本保留；无法核验或归属不明的文件保留。中断后如结果不明，历史返回 `cleanup_uncertain`，需检查清理账本及备份，不能自动重试删除。
 
 每个计划最多列出 1000 个候选；若 `has_more` 为 `true`，执行后可使用相同筛选条件重新预览下一批并逐批确认。`skipped_truncated` 为 `true` 表示跳过原因未全部列出，不影响计划中的候选范围。
 
-开发版本的 90 天自动清理默认关闭。先用 `get_retention_policy` 查询；仅在明确接受永久删除超过 90 天的符合条件原件及其可安全清理的供应商响应、响应清单和参考图快照后，调用 `set_retention_policy(enabled=true)` 并在 Host 确认界面批准。Host 不支持确认时，用户可在本机终端运行以下命令，阅读提示并输入 `ENABLE 90 DAYS`；关闭时调用 `set_retention_policy(enabled=false)`。服务只在后台运行时检查，关闭会等待当前正在处理的删除并阻止启动下一次删除；非运行期间不执行清理。该功能尚未发布及完成 Desktop 验收。
+90 天自动清理默认关闭。先用 `get_retention_policy` 查询；仅在明确接受永久删除超过 90 天的符合条件原件及其可安全清理的供应商响应、响应清单和参考图快照后，调用 `set_retention_policy(enabled=true)` 并在 Host 确认界面批准。Host 不支持确认时，用户可在本机终端运行以下命令，阅读提示并输入 `ENABLE 90 DAYS`；关闭时调用 `set_retention_policy(enabled=false)`。服务只在后台运行时检查，关闭会等待当前正在处理的删除并阻止启动下一次删除；非运行期间不执行清理。自动清理的删除行为以隔离测试为证据，Desktop 会话未执行真实清理。
 
 ```powershell
-uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync python -m zhenzhen_gptimage.mcp_api.backend_control enable-auto-cleanup --config-dir D:/MCP/zhenzhen-gptimage2.6-mcp --data-dir D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/codex
+uv --directory D:/MCP/zhenzhen-gptimage2.6-mcp run --no-sync python -m zhenzhen_gptimage.mcp_api.backend_control enable-auto-cleanup --config-dir D:/MCP/zhenzhen-gptimage2.6-mcp --data-dir D:/MCP/zhenzhen-gptimage2.6-mcp/runtime-data/shared
 ```
 
 SVG/GIF 仅文生图：通过 `output_format` 指定，`size` 支持 `auto`、规定比例或像素尺寸，也可使用 `width` 和 `height`，两种尺寸形式不能同时使用。SVG 仅允许基础 Flare，默认绘制模型 `gpt-6-luna`；GIF 的 `frame_count` 为 2–16，`frame_duration_ms` 最少 20 且为 10 的倍数。像素尺寸与 GIF 拼图限制、供应商验证范围及实际尺寸不符处理详见 [SVG 和 GIF](docs/svg-gif.md)。GIF 的 JPEG 预览仅为首帧，保存的 GIF 原件保留动画；SVG 原件为矢量，Host 预览可能不可用。
