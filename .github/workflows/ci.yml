@@ -32,7 +32,7 @@ jobs:
           node-version: '22'
       - name: Validate OpenSpec
         run: |
-          npm install --global @fission-ai/openspec@1.16.0
+          npm install --global @fission-ai/openspec@2.0.0
           openspec validate --specs --strict
 
   feature-tests:
@@ -112,7 +112,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv python install 3.12.14
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm install --global @fission-ai/openspec@1.16.0
+          npm install --global @fission-ai/openspec@2.0.0
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install current and legacy environments
         run: |
