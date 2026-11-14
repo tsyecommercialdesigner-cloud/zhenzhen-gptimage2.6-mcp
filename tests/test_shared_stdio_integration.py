@@ -10,6 +10,7 @@ from fastmcp.client.transports import PythonStdioTransport
 from zhenzhen_gptimage.mcp_api.discovery import read_endpoint
 from zhenzhen_gptimage.mcp_api.local_ipc import connect, read_frame, write_frame
 from zhenzhen_gptimage.generation.contracts import TOOL_INPUTS
+from zhenzhen_gptimage.mcp_api.contract_guidance import describe_schema, add_conditional_constraints
 from zhenzhen_gptimage.generation.models import GenerationRequest
 from zhenzhen_gptimage.generation.snapshot import create_snapshot
 from zhenzhen_gptimage.repository.tasks import accept_batch
@@ -45,7 +46,7 @@ async def test_two_stdio_processes_share_templates_and_backend(tmp_path, monkeyp
             async with Client(PythonStdioTransport(script)) as second:
                 tools = await first.list_tools()
                 assert {tool.name for tool in tools} == set(TOOL_INPUTS)
-                assert all(tool.inputSchema == TOOL_INPUTS[tool.name].model_json_schema() for tool in tools)
+                assert all(tool.inputSchema == add_conditional_constraints(tool.name, describe_schema(TOOL_INPUTS[tool.name].model_json_schema())) for tool in tools)
                 assert {tool.name for tool in tools} == {tool.name for tool in await second.list_tools()}
                 caps = await first.call_tool_mcp('get_capabilities', {})
                 assert json.loads((await first.read_resource('gptimage://capabilities'))[0].text) == caps.structuredContent['data']

@@ -6,13 +6,15 @@ import base64
 from typing import Any, Protocol
 from fastmcp import FastMCP, Context
 from fastmcp.tools.tool import ToolResult
-from mcp.types import CallToolResult, TextContent, ImageContent
+from mcp.types import CallToolResult, TextContent, ImageContent, CallToolRequest, ServerResult
 from pydantic import ValidationError
 
 from zhenzhen_gptimage.generation.contracts import TOOL_INPUTS
 from zhenzhen_gptimage.generation.models import GenerationRequest, MODELS
-from zhenzhen_gptimage.prompts.guidance import PROMPT_GUIDE, RECOVERY_GUIDE, optimize_ecommerce_prompt
+from zhenzhen_gptimage.prompts.guidance import PROMPT_GUIDE, RECOVERY_GUIDE, optimize_ecommerce_prompt, tool_guide
 from .local_ipc import IPCOutcomeUnknown
+from .contract_guidance import TOOLS, describe_schema, add_conditional_constraints
+from .validation_errors import safe_validation_error
 
 
 class Backend(Protocol):
@@ -61,8 +63,9 @@ def create_server(backend: Backend | None = None) -> FastMCP:
             # Functions using locals() include the closed-over dispatch function.
             args = {key: value for key, value in args.items() if key != 'dispatch'}
             validated = TOOL_INPUTS[name].model_validate(args)
-        except ValidationError:
-            return ProtocolResult(_failure('INVALID_ARGUMENT', '参数校验失败', '检查工具参数'))
+        except ValidationError as error:
+            message, action = safe_validation_error(name, args, error)
+            return ProtocolResult(_failure('INVALID_ARGUMENT', message, action))
         if name == 'get_capabilities' and backend is None:
             return ProtocolResult({'ok': True, 'data': capabilities(), 'warnings': [], 'error': None})
         if backend is None:
@@ -195,7 +198,8 @@ def create_server(backend: Backend | None = None) -> FastMCP:
         'list_prompt_templates': list_prompt_templates, 'render_prompt_template': render_prompt_template,
     }
     for name, tool in registered.items():
-        tool.parameters = TOOL_INPUTS[name].model_json_schema()
+        tool.parameters = add_conditional_constraints(name, describe_schema(TOOL_INPUTS[name].model_json_schema()))
+        tool.description = TOOLS[name]
 
     async def resource_value(uri, default):
         if backend is None:
@@ -215,6 +219,10 @@ def create_server(backend: Backend | None = None) -> FastMCP:
     async def recovery_guide() -> str:
         return await resource_value('gptimage://recovery-guide', RECOVERY_GUIDE)
 
+    @app.resource('gptimage://tool-guide')
+    async def tool_examples() -> str:
+        return tool_guide()
+
     @app.prompt(name='optimize_ecommerce_prompt')
     async def prompt(requirement: str, product_facts: str, image_purpose: str) -> str:
         if backend is None:
@@ -224,4 +232,21 @@ def create_server(backend: Backend | None = None) -> FastMCP:
         if not result.get('ok') or not isinstance(result.get('data'), str):
             raise RuntimeError('prompt unavailable')
         return result['data']
+
+    # The SDK's JSON Schema error includes offending input and unknown keys.
+    # Validate through the canonical model before that handler sees a request.
+    original_handler = app._mcp_server.request_handlers[CallToolRequest]
+
+    async def safe_call_handler(request):
+        name = request.params.name
+        if name in TOOL_INPUTS:
+            arguments = request.params.arguments or {}
+            try:
+                TOOL_INPUTS[name].model_validate(arguments)
+            except ValidationError as error:
+                message, action = safe_validation_error(name, arguments, error)
+                return ServerResult(ProtocolResult(_failure('INVALID_ARGUMENT', message, action)).to_mcp_result())
+        return await original_handler(request)
+
+    app._mcp_server.request_handlers[CallToolRequest] = safe_call_handler
     return app
