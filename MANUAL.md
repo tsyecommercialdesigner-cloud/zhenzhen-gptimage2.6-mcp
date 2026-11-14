@@ -76,7 +76,7 @@ if ($LASTEXITCODE -ne 0) { throw '入口检查失败。' }
 
 输出应包含 `--config-dir`、`--env-file`、`--data-dir`。此命令不生图，也不验证 Host 或供应商。完成第 4 节后，在各客户端的新会话中请 Agent 调用 `get_capabilities`；这是本地能力查询，不提交供应商生图。然后可调用 `list_tasks`、`get_task` 或 `get_image` 查询已有任务。图像生成可能收费，只有用户需要并授权时才提交。
 
-v0.1.5 发布合并提交的 [Windows CI](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/actions/runs/42785369102) 为 285 通过、1 跳过。三个 Desktop 曾分别使用 v0.1.5 和已有 PNG 完成导出会话验收；这不代表 v0.1.7 已重新完成三个 Desktop 会话或所有供应商模型的收费验证。证据见[验收记录](docs/artifact-retention-validation.md)。
+v0.1.7 发布合并提交的 [Windows CI](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/actions/runs/43540612051) 为 293 通过、1 跳过。三个 Desktop 已使用 v0.1.7 正式安装及已有 PNG 完成参数、查询和导出会话验收；本轮未重新生成图片，不代表所有供应商模型的收费生成均已验证。范围和证据见[MCP 契约验收记录](docs/mcp-contract-validation.md)。
 
 ## 4. 客户端配置
 
@@ -179,7 +179,7 @@ if (-not (Test-Path -LiteralPath $DshConfig -PathType Leaf)) { throw "找不到�
 notepad.exe $DshConfig
 ```
 
-DSH 0.2.1-rc.5 与 httpx 的已观察兼容问题可能让 `[::1]` 触发 `Invalid port: ':1]'`；上述两个字段仅作用于此 MCP 子进程。如已有其他绕过地址，保留并在两个字段一致合并，移除 `[::1]`，不要覆盖其他代理或服务。重启 DSH Desktop，检查插件运行状态，再在会话调用 `get_capabilities`。本机 v0.1.5 DSH 已实际调用导出并读取副本；其他 DSH profile 未在本轮验收。
+DSH 0.2.1-rc.5 与 httpx 的已观察兼容问题可能让 `[::1]` 触发 `Invalid port: ':1]'`；上述两个字段仅作用于此 MCP 子进程。如已有其他绕过地址，保留并在两个字段一致合并，移除 `[::1]`，不要覆盖其他代理或服务。重启 DSH Desktop，检查插件运行状态，再在会话调用 `get_capabilities`。本机 v0.1.7 DSH Desktop 已实际调用导出并读取副本；其他 DSH profile 未在本轮验收。
 
 ## 5. 启动排障、升级与回滚
 
