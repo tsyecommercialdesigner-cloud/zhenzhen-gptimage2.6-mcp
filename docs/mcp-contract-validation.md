@@ -33,3 +33,9 @@ Codex Desktop 使用相同工作树的隔离服务，先发送缺少 `family` �
 最终 Schema 的完整回归为 293 通过、1 跳过；严格校验通过变更和全部 10 个主规范。其后增强递归字段描述断言，相关协议测试 12 项通过。
 
 隔离验收结束后，已从三个 Host 配置移除 `zhenzhen-contract-test` 条目并停止相应进程、移除测试服务入口；正式服务条目保留。`.cache/contract-host-harness/` 中的测试原件和脱敏提交账本保留作为证据。
+
+2026-11-14，安装目录升级到正式发布的 v0.1.7，标签对应提交 `9f5309ebaf5678e9d2f7f736f5d1831420c852d1`。三个 Desktop 使用已配置的正式 `zhenzhen-gptimage2-6` 服务，启动目录为 `D:/MCP/zhenzhen-gptimage2.6-mcp`，数据目录为该安装的 `runtime-data/codex`；未重新生成图片。Codex 当前会话的 `generate_image` 声明展示嵌套字段，`get_task` 缺少查询条件时返回 `INVALID_ARGUMENT` 及修正建议；以既有任务查询、获取图片并导出成功。DeepSeek 和 Cowork 会话查询、获取和导出同一任务成功，两个 Agent 均报告可查看蓝杯图片；Cowork 的导出文件也在其挂载工作区中显示。DeepSeek Agent 报告 `request` 呈 `$ref` 引用式，但能识别两个必填字段，此与 Codex 的展开视图不同，不能仅凭 Agent 报告确定原因。三个导出文件 `codex-v017.png`、`dsh-v017.png`、`cowork-v017.png` 经本机独立计算，与原件的 SHA-256 均为 `5b834ee871edbd45c3fb5e309021cf52890ea8a23c72dc6ba49b54f143a2703f`。
+
+Cowork 与 DeepSeek 随后分别在正式服务上故意使用空对象调用 `get_task`，收到 `INVALID_ARGUMENT` 与选择查询条件的提示，并使用已有任务 ID 成功查询；均未发起生成。该纠错验证覆盖缺失查询条件，未实测所有无效参数组合。Cowork 验收工作区为 `D:/MCP-host-tests/zhenzhen-gptimage2.6`，导出文件在会话中打开；DeepSeek 同时报告工具图片内容可显示及磁盘副本可访问，不能推广到其他未挂载路径。
+
+本次原件证据副本和简要脱敏账本保存在 Git 忽略的 `.cache/v017-contract-acceptance/`，副本与运行目录原件摘要一致。本次 pytest 缓存中的符号链接均经核实指向各自缓存目录内部，已先移除链接再清理对应缓存目录。正式安装、用户工作区导出、测试证据及 v0.1.2 兼容性工作树均保留。
