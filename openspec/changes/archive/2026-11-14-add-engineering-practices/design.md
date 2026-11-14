@@ -2,7 +2,7 @@
 
 ## Context
 
-见 [proposal](proposal.md)。当前项目使用 OpenSpec `spec-driven`，已批准的技术选型记载于 [原设计](../archive/2026-11-09-add-image-generation-mcp/design.md)。本次将用户逐项接受的工程习惯整理为长期规范，不更改产品实现。
+见 [proposal](proposal.md)。当前项目使用 OpenSpec `spec-driven`，已批准的技术选型记载于 [原设计](../2026-11-09-add-image-generation-mcp/design.md)。本次将用户逐项接受的工程习惯整理为长期规范，不更改产品实现。
 
 ## Goals / Non-Goals
 
@@ -31,6 +31,12 @@
 - 状态：已接受。
 - 决策：真实验收原件及脱敏账本保留在 Git 忽略的 `.cache/`；结论文档化并纳入版本控制。测试缓存和其他临时产物按归属分类清理，不能误删真实验收证据。
 - 备选：删除全部 `.cache/` 或将全部原件提交 Git；分别会丢失证据或扩大私有数据暴露。
+
+### ADR-004：历史增量与后续 Git 规则的关系
+
+- 状态：已接受。历史增量保留当时的 Git 与合并验证条款，作为本变更的原始记录。
+- 后续演进：现行 `engineering-practices` 主规范已经包含本变更的其他要求；Git 与合并验证要求经后续变更细化，并新增分支职责、单人审查和分阶段 CI/CD 条款。
+- 归档处理：以现行主规范为准，归档时跳过历史增量的重复同步，避免以旧条款覆盖后续决定；首次 Host 联调配置与发布版验收环境要求已在主规范保留。
 
 ## Risks / Trade-offs
 
