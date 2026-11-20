@@ -1,6 +1,6 @@
 # zhenzhen-gptimage2.6-mcp 成员使用手册
 
-本手册面向 Windows 成员，适用于 v0.1.9 发布候选。正式 Release、完整提交及本机安装验收待核实。示例使用 PowerShell 和默认安装目录，使用其他目录时需同时修改安装、配置及命令中的路径。
+本手册面向 Windows 成员，适用于 [v0.1.9 正式版](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/releases/tag/v0.1.9)。发布提交为 `1949c231e364ce0d5e90a519ae39583bf3b1da5c`。示例使用 PowerShell 和默认安装目录，使用其他目录时需同时修改安装、配置及命令中的路径。
 
 ## 1. 环境准备
 
@@ -75,6 +75,8 @@ if ($LASTEXITCODE -ne 0) { throw '入口检查失败。' }
 ```
 
 输出应包含 `--config-dir`、`--env-file`、`--data-dir`。此命令不生图，也不验证 Host 或供应商。完成第 4 节后，在各客户端的新会话中请 Agent 调用 `get_capabilities`；这是本地能力查询，不提交供应商生图。然后可调用 `list_tasks`、`get_task` 或 `get_image` 查询已有任务。图像生成可能收费，只有用户需要并授权时才提交。
+
+v0.1.9 的 [Windows 完整发布验收](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/actions/runs/44688220187)为 302 通过、1 跳过。[合并后 CI](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/actions/runs/44688655298)核实发布提交的文件树与候选一致。正式 Release 的 wheel 和源码包均来自该候选。
 
 v0.1.9 已在开发工作树的隔离配置中通过三个 Desktop 的尺寸提醒和结案原件找回会话验收，详见[恢复契约验收记录](openspec/changes/archive/2026-11-20-improve-mcp-contracts-and-recovery/verification.md)。正式安装及升级验收待复核。
 
