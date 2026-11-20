@@ -1,6 +1,6 @@
 [project]
 name = "zhenzhen-gptimage2-6-mcp"
-version = "0.1.8"
+version = "0.1.9"
 description = "Local MCP image generation server"
 requires-python = "==3.12.14"
 dependencies = [
@@ -28,3 +28,4 @@ packages = ["src/zhenzhen_gptimage"]
 "src/zhenzhen_gptimage/repository/schema_v1.sql" = "zhenzhen_gptimage/repository/schema_v1.sql"
 "src/zhenzhen_gptimage/repository/schema_v2.sql" = "zhenzhen_gptimage/repository/schema_v2.sql"
 "src/zhenzhen_gptimage/repository/schema_v3.sql" = "zhenzhen_gptimage/repository/schema_v3.sql"
+"src/zhenzhen_gptimage/repository/schema_v4.sql" = "zhenzhen_gptimage/repository/schema_v4.sql"

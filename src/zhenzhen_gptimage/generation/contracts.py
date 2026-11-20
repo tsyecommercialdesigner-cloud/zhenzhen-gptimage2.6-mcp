@@ -19,6 +19,7 @@ class ErrorCode(StrEnum):
     SUBMISSION_UNKNOWN = 'SUBMISSION_UNKNOWN'
     DEADLINE_EXCEEDED = 'DEADLINE_EXCEEDED'
     RESPONSE_INVALID = 'RESPONSE_INVALID'
+    SIZE_MISMATCH = 'SIZE_MISMATCH'
     ARTIFACT_UNAVAILABLE = 'ARTIFACT_UNAVAILABLE'
     PERSISTENCE_ERROR = 'PERSISTENCE_ERROR'
     STATE_CONFLICT = 'STATE_CONFLICT'
@@ -34,6 +35,7 @@ class ErrorDetail(Contract):
     retryable: bool
     task_id: str | None = None
     next_action: str
+    diagnostic: dict | None = None
 
 class Result(Contract, Generic[T]):
     ok: bool
@@ -81,6 +83,9 @@ class TaskView(Contract):
     error_category: str | None = None
     allowed_actions: list[str]
     remote_task: RemoteTaskView | None = None
+    size_mismatch: dict | None = None
+    close_requires_confirmation: bool | None = None
+    recovery_mode: str | None = None
 
 class BatchItem(Contract):
     input_index: int = Field(ge=0, le=19)
@@ -178,6 +183,16 @@ class AcceptGifSizeInput(Contract):
     sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     width: int = Field(ge=1)
     height: int = Field(ge=1)
+class AcceptStaticSizeInput(TaskInput):
+    candidate_digest: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+class ClosedArtifactInput(TaskInput):
+    image_index: int = Field(default=0, ge=0, le=3)
+
+class ExportClosedArtifactInput(ClosedArtifactInput):
+    sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    destination: str = Field(min_length=1)
+
 class CloseInput(Contract):
     task_id: str
     expected_status: Literal['unknown','recovery_pending']
@@ -208,6 +223,9 @@ TOOL_INPUTS = {
     'get_retention_policy': EmptyInput, 'set_retention_policy': SetRetentionPolicyInput,
     'recover_task': TaskInput, 'close_task': CloseInput, 'save_prompt_template': SaveTemplateInput,
     'accept_gif_size': AcceptGifSizeInput,
+    'accept_static_size': AcceptStaticSizeInput,
+    'inspect_closed_artifact': ClosedArtifactInput,
+    'export_closed_artifact': ExportClosedArtifactInput,
     'get_prompt_template': TemplateInput, 'list_prompt_templates': TemplateListInput,
     'render_prompt_template': RenderTemplateInput,
 }

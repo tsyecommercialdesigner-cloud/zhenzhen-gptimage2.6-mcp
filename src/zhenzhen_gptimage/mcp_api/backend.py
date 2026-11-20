@@ -3,8 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 import time
+from uuid import uuid4
+from zhenzhen_gptimage.artifacts.output import ImageResultError, ImageDownloadError
+from zhenzhen_gptimage.artifacts.storage import ResourceLimitError
+from zhenzhen_gptimage.providers.t8_star.client import ProviderError
 from zhenzhen_gptimage.generation.models import GenerationRequest
-from zhenzhen_gptimage.generation.contracts import SaveTemplateInput, ErrorCode
+from zhenzhen_gptimage.generation.contracts import SaveTemplateInput, ErrorCode, TOOL_INPUTS
 from zhenzhen_gptimage.generation.snapshot import IdempotencyConflict
 from zhenzhen_gptimage.prompts.templates import get_template, save_template, list_templates, render_template, TemplateConflict
 from zhenzhen_gptimage.repository.tasks import list_tasks, QueueFull, StateConflict
@@ -19,9 +23,11 @@ def millis(value):
     return int(date.timestamp()*1000)
 
 def success(data, warnings=()): return {'ok':True,'data':data,'error':None,'warnings':list(warnings)}
-def failure(code, message, action, *, data=None, task_id=None):
+def failure(code, message, action, *, data=None, task_id=None, phase=None, reason=None, can_retry_recovery=False):
     error={'code':code,'message':message,'next_action':action,'retryable':False}
     if task_id is not None: error['task_id']=task_id
+    if phase is not None:
+        error['diagnostic'] = {'phase': phase, 'reason': reason, 'can_retry_recovery': can_retry_recovery}
     return {'ok':False,'data':data,'warnings':[],'error':error}
 
 class ServiceBackend:
@@ -29,6 +35,7 @@ class ServiceBackend:
         self.worker, self.generation, self.recovery = worker, generation, recovery
         self.export_root = export_root
         self.retention = retention
+        self._recovery_plans = {}
 
     async def _task(self, row):
         row = dict(row)
@@ -49,9 +56,12 @@ class ServiceBackend:
                 image['available'] = False
             elif self.recovery is not None:
                 if pending_metadata is not None:
-                    from zhenzhen_gptimage.artifacts.recovery import _read_image
                     import asyncio
-                    image['available'],_=await asyncio.to_thread(_read_image,image,False,1,1)
+                    if row['error_category'] == 'SIZE_MISMATCH':
+                        image['available'] = await asyncio.to_thread(self.recovery._verify_candidate, image)
+                    else:
+                        from zhenzhen_gptimage.artifacts.recovery import _read_image
+                        image['available'],_=await asyncio.to_thread(_read_image,image,False,1,1)
                 else:
                     current,_=await self.recovery.image(row['task_id'],image['image_index'],False)
                     image['available'] = current['available']
@@ -61,14 +71,59 @@ class ServiceBackend:
         actions = {'unknown':['close_task'], 'recovery_pending':['recover_task','close_task'], 'succeeded':['get_image']}.get(row['status'],[])
         remote=await self.worker.fetchone('SELECT remote_id,remote_status FROM remote_tasks WHERE task_id=?',(row['task_id'],))
         if remote is not None and row['status']=='unknown': actions=['recover_task','close_task']
+        if remote is not None and remote['remote_status'] not in ('SUCCESS', 'FAILURE') and 'close_task' in actions:
+            actions.remove('close_task')
+        if row['status'] == 'closed':
+            actions = ['inspect_closed_artifact']
         if row['status']=='recovery_pending' and images and images[0].get('mime_type')=='image/gif':
             actions = actions + ['accept_gif_size']
-        return {'task_id':row['task_id'],'batch_id':row['batch_id'], 'idempotency_key':row['idempotency_key'],
+        view = {'task_id':row['task_id'],'batch_id':row['batch_id'], 'idempotency_key':row['idempotency_key'],
                 'status':row['status'],'resolved_model':row['resolved_model'],'channel':row['channel'],
                 'width':row['width'],'height':row['height'],'created_at':iso(row['created_at']),
                 'deadline_at':iso(row['deadline_at']),'attempt_count':row['attempt_count'],
                 'images':images,'error_category':row['error_category'],'allowed_actions':actions,
                 'remote_task': dict(remote) if remote is not None else None}
+        if 'close_task' in actions:
+            view['close_requires_confirmation'] = True
+        if row['status'] in ('unknown', 'recovery_pending'):
+            view['recovery_mode'] = ('check_same_remote_task' if remote is not None and row['status'] == 'unknown'
+                                     else 'process_saved_response' if row['response_ref'] and row['status'] == 'recovery_pending'
+                                     else 'no_response_evidence')
+            if view['recovery_mode'] == 'no_response_evidence' and 'recover_task' in actions:
+                actions.remove('recover_task')
+        if row['status'] == 'recovery_pending' and row['error_category'] == 'SIZE_MISMATCH':
+            candidate = await self.worker.fetchone('SELECT digest FROM static_size_candidates WHERE task_id=?', (row['task_id'],))
+            if candidate is not None:
+                view['recovery_mode'] = 'use_saved_static_images'
+                if images and all(image['available'] for image in images):
+                    if 'recover_task' not in actions:
+                        actions.insert(0, 'recover_task')
+                    actions.append('accept_static_size')
+                view['size_mismatch'] = {
+                    'requested': {'width': row['width'], 'height': row['height']},
+                    'candidate_digest': candidate['digest'],
+                    'actual': [{key: image[key] for key in ('image_index','width','height','sha256','available')} for image in images],
+                    'next_action': '调用 recover_task 原样登记已有候选，无需重新生成',
+                }
+        elif row['status'] == 'succeeded' and row['channel'] in ('images', 'flux') and images:
+            requested = (row['width'], row['height'])
+            static_types = {'image/png', 'image/jpeg', 'image/webp'}
+            if all(image['mime_type'] in static_types for image in images) and any(
+                (image['width'], image['height']) != requested for image in images
+            ):
+                view['size_mismatch'] = {
+                    'code': 'SIZE_MISMATCH',
+                    'requested': {'width': requested[0], 'height': requested[1]},
+                    'actual': [{key: image[key] for key in ('image_index','width','height','sha256','available')} for image in images],
+                }
+        return view
+
+    @staticmethod
+    def _size_warnings(*views):
+        return [
+            f"SIZE_MISMATCH: 任务 {view['task_id']} 的实际尺寸与请求不同，已按原始尺寸保存"
+            for view in views if view['status'] == 'succeeded' and 'size_mismatch' in view
+        ]
 
     @staticmethod
     def _template(row):
@@ -77,13 +132,104 @@ class ServiceBackend:
         out['created_at']=iso(out['created_at']);out['updated_at']=iso(out['updated_at'])
         return out
 
+    async def _prepare_recovery(self, args):
+        action = args['action']
+        if action not in ('close_task', 'accept_static_size', 'export_closed_artifact'):
+            raise ValueError('invalid recovery action')
+        values = TOOL_INPUTS[action].model_validate(args['arguments']).model_dump()
+        task_id = values['task_id']
+        row = await self.recovery._row(task_id)
+        if action == 'close_task':
+            if row['status'] == 'closed':
+                return success(await self._task(row))
+            if row['status'] != values['expected_status']:
+                raise StateConflict('closure state changed')
+            remote = await self.worker.fetchone('SELECT remote_status FROM remote_tasks WHERE task_id=?', (task_id,))
+            if remote is not None and remote['remote_status'] not in ('SUCCESS', 'FAILURE'):
+                raise StateConflict('remote task still active')
+            values['expected_revision'] = row['revision']
+            summary = {'effect': '结束常规恢复并释放队列容量，不取消供应商请求',
+                       'file_status': '可在结案后检查现有原件' if row['response_ref'] else '目前无已持久化的响应',
+                       'reason': values['reason'], 'status': row['status']}
+        elif action == 'accept_static_size':
+            view = await self._task(row)
+            mismatch = view.get('size_mismatch')
+            if mismatch is None and row['status'] == 'succeeded':
+                record = await self.worker.fetchone('SELECT digest FROM static_size_candidates WHERE task_id=? AND accepted_at IS NOT NULL',(task_id,))
+                if record is not None and record['digest'] == values['candidate_digest']:
+                    return success(view)
+            if mismatch is None or mismatch['candidate_digest'] != values['candidate_digest'] or 'accept_static_size' not in view['allowed_actions']:
+                raise StateConflict('candidate no longer available')
+            summary = {'effect': '原样登记全部候选图片为成功结果', **mismatch}
+        else:
+            candidate = await self.recovery.closed_candidate(task_id, values['image_index'])
+            if candidate['sha256'] != values['sha256']:
+                raise StateConflict('candidate changed')
+            from pathlib import Path
+            from zhenzhen_gptimage.artifacts.export_paths import validate_export_destination
+            try:
+                destination = validate_export_destination(self.export_root, Path(values['destination']))
+            except FileExistsError:
+                return failure('STATE_CONFLICT', '目标文件已存在', '选择其他目标路径')
+
+            summary = {'effect': '复制原件，保留任务结案状态', 'candidate': candidate, 'destination': str(destination)}
+        now = time.monotonic()
+        self._recovery_plans = {key: item for key, item in self._recovery_plans.items() if item[0] > now}
+        if len(self._recovery_plans) >= 100:
+            return failure('RESOURCE_LIMIT', '待确认操作过多', '稍后重新申请')
+        plan_id = uuid4().hex
+        details = {'plan_id': plan_id, 'action': action, 'task_id': task_id, 'expires_in_seconds': 300, **summary}
+        self._recovery_plans[plan_id] = (now + 300, details, values)
+        return success(details)
+
+    def _recovery_plan(self, plan_id, consume=False):
+        item = self._recovery_plans.pop(plan_id, None) if consume else self._recovery_plans.get(plan_id)
+        if item is None or item[0] <= time.monotonic():
+            raise StateConflict('approval expired')
+        return item[1:]
+
+    async def _execute_recovery(self, plan_id):
+        details, args = self._recovery_plan(plan_id, consume=True)
+        action = details['action']
+        if action == 'close_task':
+            return await self._recovery_call(action, args)
+        if action == 'accept_static_size':
+            row = await self.recovery.accept_static(args['task_id'], args['candidate_digest'])
+            return await self._add_preview(success(await self._task(row), ['已按用户确认登记实际尺寸']), args['task_id'])
+        try:
+            return success(await self.recovery.export_closed(args['task_id'], args['image_index'], args['sha256'],
+                                 args['destination'], self.export_root))
+        except FileExistsError:
+            return failure('STATE_CONFLICT', '目标文件已存在', '选择其他目标路径')
+        except (OSError, ValueError):
+            return failure('ARTIFACT_UNAVAILABLE', '原件或目标路径未通过导出校验', '检查原件和目标路径')
+
     async def _recovery_call(self, name, args):
         if name == 'recover_task':
-            row=await self.recovery.recover(args['task_id'])
-            result=success(await self._task(row))
+            task_id = args['task_id']
+            try:
+                row = await self.recovery.recover(task_id)
+            except (ImageResultError, ImageDownloadError, ResourceLimitError, ProviderError,
+                    OSError, ValueError, StateConflict, TimeoutError) as exc:
+                current = await self.recovery._row(task_id)
+                view = await self._task(current)
+                reason, message, retry = (
+                    ('state_conflict', '当前任务状态或保存的响应不允许恢复', False) if isinstance(exc, StateConflict) else
+                    ('download_failed', '无法下载已有响应中的图片', True) if isinstance(exc, ImageDownloadError) else
+                    ('deadline', '恢复超过时间预算', True) if isinstance(exc, TimeoutError) else
+                    ('file_error', '无法读取或保存恢复文件', True) if isinstance(exc, OSError) else
+                    ('resource_limit', '结果超过资源限制', False) if isinstance(exc, ResourceLimitError) else
+                    ('invalid_result', '已有结果未通过解析或验证', False)
+                )
+                return failure('STATE_CONFLICT' if isinstance(exc, StateConflict) else 'ARTIFACT_UNAVAILABLE',
+                               message, '查看当前任务状态与恢复证据，保留原任务，不重新提交',
+                               data=view, task_id=task_id, phase='recovery', reason=reason,
+                               can_retry_recovery=retry)
+            view = await self._task(row)
+            result = success(view, self._size_warnings(view))
             return await self._add_preview(result,args['task_id']) if row['status']=='succeeded' else result
         if name == 'close_task':
-            row,_=await self.recovery.close(args['task_id'],args['expected_status'],args['reason'])
+            row,_=await self.recovery.close(args['task_id'],args['expected_status'],args['reason'],args.get('expected_revision'))
             return success(await self._task(row))
         if name == 'accept_gif_size':
             row=await self.recovery.accept_gif_size(args['task_id'],args['sha256'],args['width'],args['height'])
@@ -195,11 +341,17 @@ class ServiceBackend:
                 view=await self._task(row)
                 if request.execution_mode=='async' and view['status'] in ('queued','submitting','retry_wait','materializing'):
                     return success(view)
+                if row['status'] == 'recovery_pending' and row['error_category'] == 'SIZE_MISMATCH' and self.recovery:
+                    return await self._recovery_call('recover_task', {'task_id': row['task_id']})
                 if view['status'] != 'succeeded':
                     code=view['error_category'] or ('DEADLINE_EXCEEDED' if view['status']=='expired' else 'SUBMISSION_UNKNOWN')
                     if code not in {item.value for item in ErrorCode}: code='PROVIDER_REJECTED'
+                    if code == 'SUBMISSION_UNKNOWN':
+                        return failure(code, '供应商可能已受理并产生费用',
+                                       '使用原任务 ID 或幂等键查询；未经用户授权不得另行提交',
+                                       data=view, task_id=view['task_id'], phase='submission', reason='outcome_unknown')
                     return failure(code,'任务未成功完成','查询任务状态',data=view,task_id=view['task_id'])
-                result=success(view)
+                result=success(view, self._size_warnings(view))
                 if request.output_format=='gif' and view['images']:
                     width,height=view['images'][0]['width'],view['images'][0]['height']
                     mismatch=(request.width is not None and (width,height)!=(request.width,request.height))
@@ -216,14 +368,15 @@ class ServiceBackend:
                 result=success({'batch_id':batch,'items':[{'input_index':r['input_index'],'reused':bool(r['reused']),'task':v} for r,v in zip(records,views)],
                     'succeeded_count':sum(v['status']=='succeeded' for v in views),
                     'unresolved_count':sum(v['status'] in unresolved for v in views),
-                    'failed_count':sum(v['status'] not in unresolved|{'succeeded'} for v in views)})
+                    'failed_count':sum(v['status'] not in unresolved|{'succeeded'} for v in views)}, self._size_warnings(*views))
                 first=next((v for v in views if v['status']=='succeeded'),None)
                 return await self._add_preview(result,first['task_id']) if first else result
             if name == 'get_task':
                 field='task_id' if args.get('task_id') else 'idempotency_key'
                 row=await self.worker.fetchone('SELECT * FROM tasks WHERE '+field+'=?',(args[field],))
                 if row is None: raise KeyError('task')
-                return success(await self._task(row))
+                view = await self._task(row)
+                return success(view, self._size_warnings(view))
             if name == 'list_tasks':
                 filters=dict(args); filters['created_from']=millis(filters.get('created_from'));filters['created_to']=millis(filters.get('created_to'))
                 rows,cursor=await self.worker.run(lambda db:list_tasks(db,**filters))
@@ -241,7 +394,21 @@ class ServiceBackend:
                 row=await self.worker.run(get_template,args['code'])
                 if row is None: raise KeyError('template')
                 return success(render_template(row,args['variables']))
-            if name in ('recover_task','close_task','accept_gif_size','get_image'):
+            if self.recovery is not None:
+                if name == '__prepare_recovery__':
+                    return await self._prepare_recovery(args)
+                if name == '__recovery_plan__':
+                    details, _ = self._recovery_plan(args['plan_id'])
+                    return success(details)
+                if name == '__execute_recovery__':
+                    return await self._execute_recovery(args['plan_id'])
+                if name == 'inspect_closed_artifact':
+                    try:
+                        return success(await self.recovery.closed_candidate(args['task_id'], args['image_index']))
+                    except (StateConflict, OSError, ValueError):
+                        return failure('ARTIFACT_UNAVAILABLE', '已结案原件缺失、已清理或未通过归属及完整性校验',
+                                       '查看任务历史及已保存的导出副本', task_id=args['task_id'])
+            if name in ('recover_task','accept_gif_size','get_image'):
                 if self.recovery is None: return failure('CONFIG_ERROR','恢复功能尚未接入','完成服务组装')
                 return await self._recovery_call(name,args)
             return failure('INVALID_ARGUMENT','未知工具','检查工具名称')
