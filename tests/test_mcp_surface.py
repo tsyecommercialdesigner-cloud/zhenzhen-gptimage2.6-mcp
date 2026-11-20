@@ -9,7 +9,8 @@ from zhenzhen_gptimage.prompts.guidance import TOOL_EXAMPLES
 
 def test_documented_examples_validate_without_provider():
     for key, example in TOOL_EXAMPLES.items():
-        tool = 'generate_image' if key in {'reference', 'gif', 'svg'} else key
+        tool = ('generate_image' if key in {'reference', 'gif', 'svg', 'route_2k'}
+                else 'get_task' if key == 'query_unknown' else key)
         TOOL_INPUTS[tool].model_validate(example)
 
 @pytest.mark.parametrize('name,cases', [
@@ -149,7 +150,7 @@ async def test_unknown_submission_guidance_does_not_resubmit():
         result = await client.call_tool_mcp('generate_image', TOOL_EXAMPLES['generate_image'])
         error = result.structuredContent['error']
         assert result.isError and error['code'] == 'SUBMISSION_UNKNOWN'
-        assert '幂等键' in error['next_action'] and '不要重复提交' in error['next_action']
+        assert '幂等键' in error['next_action'] and '未经用户授权' in error['next_action']
         assert backend.calls == 1
 
 @pytest.mark.asyncio

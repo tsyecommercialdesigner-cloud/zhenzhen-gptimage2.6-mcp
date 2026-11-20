@@ -7,11 +7,16 @@ from zhenzhen_gptimage.mcp_api.server import create_server
 from zhenzhen_gptimage.mcp_api.backend import ServiceBackend
 from zhenzhen_gptimage.repository.worker import DatabaseWorker
 
+async def approve_recovery(message, response_type, params, context):
+    from fastmcp.client.elicitation import ElicitResult
+    return ElicitResult(action='accept')
+
+
 @pytest.mark.asyncio
 async def test_backend_templates_and_protocol(tmp_path):
     worker=DatabaseWorker(tmp_path/'data.sqlite')
     backend=ServiceBackend(worker,None)
-    async with Client(create_server(backend)) as client:
+    async with Client(create_server(backend), elicitation_handler=approve_recovery) as client:
         result=await client.call_tool('save_prompt_template',{'code':'sku','content':'Show {{item}}','variables':[{'name':'item','required':True}]})
         assert result.structured_content['ok']
         result=await client.call_tool('render_prompt_template',{'code':'sku','variables':{'item':'cup'}})
@@ -38,7 +43,7 @@ async def test_recovery_and_close_tools_return_real_state(tmp_path):
     await worker.run(lambda db:db.execute("UPDATE tasks SET status='unknown' WHERE task_id=?",(ids[0],)))
     materializer=ArtifactMaterializer(tmp_path)
     backend=ServiceBackend(worker,None,RecoveryService(worker,materializer,tmp_path,TaskLocks()))
-    async with Client(create_server(backend)) as client:
+    async with Client(create_server(backend), elicitation_handler=approve_recovery) as client:
         cannot=await client.call_tool_mcp('recover_task',{'task_id':ids[0]})
         assert cannot.isError and cannot.structuredContent['error']['code']=='STATE_CONFLICT'
         closed=await client.call_tool_mcp('close_task',{'task_id':ids[0],'expected_status':'unknown','reason':'done'})
@@ -141,7 +146,7 @@ async def test_image_preview_mcp_content_and_missing_file(tmp_path):
         (ids[0],0,str(image),hashlib.sha256(payload).hexdigest(),'image/png',len(payload),2048,1024,None,1000)))
     materializer=ArtifactMaterializer(tmp_path)
     backend=ServiceBackend(worker,None,RecoveryService(worker,materializer,tmp_path,TaskLocks()))
-    async with Client(create_server(backend)) as client:
+    async with Client(create_server(backend), elicitation_handler=approve_recovery) as client:
         result=await client.call_tool_mcp('get_image',{'task_id':ids[0]})
         assert not result.isError and sum(item.type=='image' for item in result.content)==1
         image.unlink()
@@ -175,7 +180,7 @@ async def test_mock_generation_batch_through_mcp(tmp_path):
     locks=TaskLocks();recovery=RecoveryService(worker,materializer,tmp_path,locks)
     provider=Provider();scheduler=Scheduler(worker,provider,tmp_path,materializer,task_locks=locks)
     backend=ServiceBackend(worker,GenerationService(admission,scheduler),recovery)
-    async with Client(create_server(backend)) as client:
+    async with Client(create_server(backend), elicitation_handler=approve_recovery) as client:
         request=lambda key,prompt:{'idempotency_key':key,'family':'flare','width':512,'height':512,'prompt':prompt}
         result=await client.call_tool_mcp('generate_batch',{'requests':[request('a','ok'),request('b','fail'),request('a','ok')]})
         assert not result.isError
@@ -202,7 +207,7 @@ async def test_cancelled_host_can_query_same_idempotency_key(tmp_path):
     worker=DatabaseWorker(tmp_path/'test.db');provider=Provider()
     scheduler=Scheduler(worker,provider,tmp_path,Materializer())
     backend=ServiceBackend(worker,GenerationService(Admission(worker,tmp_path,Limits(free_disk_bytes=1)),scheduler))
-    async with Client(create_server(backend)) as client:
+    async with Client(create_server(backend), elicitation_handler=approve_recovery) as client:
         call=asyncio.create_task(client.call_tool_mcp('generate_image',{'request':{'idempotency_key':'lost','family':'flare','width':512,'height':512,'prompt':'cup'}}))
         await asyncio.wait_for(provider.started.wait(),3)
         call.cancel()

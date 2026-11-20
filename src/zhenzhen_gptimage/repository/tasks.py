@@ -213,16 +213,31 @@ def publish_images(db, task_id, revision, images, now_ms):
 def stage_gif_size_mismatch(db, task_id, revision, images, now_ms):
     if len(images) != 1 or images[0].mime_type != 'image/gif':
         raise ValueError('expected one GIF')
-    image=images[0]
+    _stage_size_mismatch(db, task_id, revision, images, now_ms, static=False)
+
+def stage_static_size_mismatch(db, task_id, revision, images, now_ms):
+    if not 1 <= len(images) <= 4 or any(i.image_index != n for n, i in enumerate(images)):
+        raise ValueError('invalid static image set')
+    _stage_size_mismatch(db, task_id, revision, images, now_ms, static=True)
+
+def _stage_size_mismatch(db, task_id, revision, images, now_ms, *, static):
+    from hashlib import sha256
     db.execute('BEGIN IMMEDIATE')
     try:
         row=db.execute('SELECT status FROM tasks WHERE task_id=? AND revision=?',(task_id,revision)).fetchone()
         if row is None or row['status']!='materializing': raise StateConflict('task not materializing')
-        db.execute('''INSERT OR REPLACE INTO pending_image_artifacts
-          VALUES (?,?,?,?,?,?,?,?,?,?)''',(task_id,image.image_index,image.local_path,image.sha256,image.mime_type,
-          image.bytes,image.width,image.height,image.revised_prompt,json.dumps(image.metadata or {})))
-        db.execute("UPDATE tasks SET status='recovery_pending',error_category='ARTIFACT_UNAVAILABLE',updated_at=?,revision=revision+1 WHERE task_id=? AND revision=?",(now_ms,task_id,revision))
-        db.execute("INSERT INTO task_events(task_id,from_status,to_status,reason_code,created_at) VALUES (?,'materializing','recovery_pending','gif_size_mismatch',?)",(task_id,now_ms))
+        for image in images:
+            db.execute('''INSERT OR REPLACE INTO pending_image_artifacts
+              VALUES (?,?,?,?,?,?,?,?,?,?)''',(task_id,image.image_index,image.local_path,image.sha256,image.mime_type,
+              image.bytes,image.width,image.height,image.revised_prompt,json.dumps(image.metadata or {})))
+        if static:
+            identity = [(i.image_index, i.sha256, i.width, i.height) for i in images]
+            digest = sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest()
+            db.execute('INSERT INTO static_size_candidates VALUES (?,?,NULL)', (task_id, digest))
+        code = 'SIZE_MISMATCH' if static else 'ARTIFACT_UNAVAILABLE'
+        reason = 'static_size_mismatch' if static else 'gif_size_mismatch'
+        db.execute("UPDATE tasks SET status='recovery_pending',error_category=?,updated_at=?,revision=revision+1 WHERE task_id=? AND revision=?",(code,now_ms,task_id,revision))
+        db.execute("INSERT INTO task_events(task_id,from_status,to_status,reason_code,created_at) VALUES (?,'materializing','recovery_pending',?,?)",(task_id,reason,now_ms))
         db.commit()
     except BaseException:
         db.rollback();raise
@@ -248,3 +263,38 @@ def accept_pending_gif(db, task_id, digest, width, height, now_ms):
         db.commit()
     except BaseException:
         db.rollback();raise
+
+
+def accept_static_size(db, task_id, revision, digest, now_ms, automatic=False):
+    db.execute('BEGIN IMMEDIATE')
+    try:
+        changed = db.execute(
+            "UPDATE tasks SET status='succeeded',error_category=NULL,updated_at=?,revision=revision+1 "
+            "WHERE task_id=? AND revision=? AND status='recovery_pending' AND error_category='SIZE_MISMATCH'",
+            (now_ms, task_id, revision),
+        ).rowcount
+        if changed != 1:
+            raise StateConflict('static candidate state changed')
+        changed = db.execute(
+            'UPDATE static_size_candidates SET accepted_at=? WHERE task_id=? AND digest=? AND accepted_at IS NULL',
+            (now_ms, task_id, digest),
+        ).rowcount
+        if changed != 1:
+            raise StateConflict('static candidate changed')
+        changed = db.execute(
+            'INSERT INTO image_artifacts(task_id,image_index,local_path,sha256,mime_type,bytes,width,height,revised_prompt,created_at) '
+            'SELECT task_id,image_index,local_path,sha256,mime_type,bytes,width,height,revised_prompt,? '
+            'FROM pending_image_artifacts WHERE task_id=?', (now_ms, task_id),
+        ).rowcount
+        if not 1 <= changed <= 4:
+            raise StateConflict('static candidate set unavailable')
+        db.execute('DELETE FROM pending_image_artifacts WHERE task_id=?', (task_id,))
+        db.execute(
+            "INSERT INTO task_events(task_id,from_status,to_status,reason_code,created_at) "
+            "VALUES (?,'recovery_pending','succeeded',?,?)",
+            (task_id, 'static_size_retained' if automatic else 'static_size_accepted', now_ms),
+        )
+        db.commit()
+    except BaseException:
+        db.rollback()
+        raise

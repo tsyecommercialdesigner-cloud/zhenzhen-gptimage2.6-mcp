@@ -187,7 +187,7 @@ class ArtifactMaterializer:
                 # while one can still publish files behind the recovery logic.
                 await asyncio.shield(publication)
                 raise
-            if mismatch and not (expected_format == 'gif' and accept_actual_size):
+            if mismatch and expected_format is not None and not (expected_format == 'gif' and accept_actual_size):
                 raise ImageResultError('generated image dimensions differ from requested size', artifacts=published)
             return published
 

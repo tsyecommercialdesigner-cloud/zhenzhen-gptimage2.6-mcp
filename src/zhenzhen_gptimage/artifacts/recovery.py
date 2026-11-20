@@ -2,18 +2,21 @@
 from __future__ import annotations
 import asyncio
 import hashlib
+import json
+import re
+from .export import open_managed_image, export_original
 from io import BytesIO
 from pathlib import Path
 import time
 from PIL import Image
 from .storage import inspect_response
 from zhenzhen_gptimage.generation.snapshot import RequestSnapshot
-from zhenzhen_gptimage.repository.tasks import StateConflict, transition, publish_images, stage_gif_size_mismatch, accept_pending_gif
+from zhenzhen_gptimage.repository.tasks import StateConflict, transition, publish_images, stage_gif_size_mismatch, accept_pending_gif, accept_static_size
 from .output import ImageResultError
 
 def _now(): return time.time_ns() // 1_000_000
 
-def _close(db, task_id, expected_status, reason, now):
+def _close(db, task_id, expected_status, reason, now, expected_revision=None):
     if expected_status not in ('unknown', 'recovery_pending') or not 1 <= len(reason) <= 1024:
         raise ValueError('invalid closure')
     db.execute('BEGIN IMMEDIATE')
@@ -25,7 +28,8 @@ def _close(db, task_id, expected_status, reason, now):
             if closure is None: raise StateConflict('missing closure record')
             db.commit()
             return dict(row), dict(closure)
-        if row['status'] != expected_status: raise StateConflict('task state changed')
+        if row['status'] != expected_status or (expected_revision is not None and row['revision'] != expected_revision):
+            raise StateConflict('task state changed')
         remote=db.execute('SELECT remote_status FROM remote_tasks WHERE task_id=?',(task_id,)).fetchone()
         if remote is not None and remote['remote_status'] not in ('SUCCESS','FAILURE'):
             raise StateConflict('remote task has not reached a terminal state')
@@ -108,6 +112,11 @@ class RecoveryService:
         row = await self._row(task_id)
         if row['status'] == 'unknown' and self.scheduler is not None:
             return await self.scheduler.recover_remote(task_id)
+        if row['status'] == 'recovery_pending' and row['error_category'] == 'SIZE_MISMATCH':
+            candidate = await self.worker.fetchone('SELECT digest FROM static_size_candidates WHERE task_id=?', (task_id,))
+            if candidate is None:
+                raise StateConflict('static candidate unavailable')
+            return await self.accept_static(task_id, candidate['digest'], automatic=True)
         active = self._active_recoveries.get(task_id)
         if active is None:
             active = asyncio.create_task(self._recover(task_id))
@@ -171,9 +180,136 @@ class RecoveryService:
                 raise
             return await self._row(task_id)
 
-    async def close(self, task_id, expected_status, reason):
+    async def close(self, task_id, expected_status, reason, expected_revision=None):
         async with self.locks.hold(task_id):
-            return await self.worker.run(_close, task_id, expected_status, reason, _now())
+            return await self.worker.run(_close, task_id, expected_status, reason, _now(), expected_revision)
+
+    def _verify_candidate(self, image):
+        try:
+            with open_managed_image(self.data_dir, Path(image['local_path'])) as stream:
+                digest = hashlib.sha256()
+                size = 0
+                for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                    size += len(chunk)
+                    if size > image['bytes']:
+                        return False
+                    digest.update(chunk)
+                return size == image['bytes'] and digest.hexdigest() == image['sha256']
+        except (OSError, ValueError):
+            return False
+
+    async def closed_candidate(self, task_id, index):
+        async with self.locks.hold(task_id):
+            return await self._closed_candidate(task_id, index)
+
+    async def _closed_candidate(self, task_id, index):
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', task_id):
+            raise StateConflict('invalid task slot')
+        row = await self._row(task_id)
+        if row['status'] != 'closed':
+            raise StateConflict('task is not closed')
+        excluded = await self.worker.fetchone(
+            'SELECT 1 FROM artifact_cleanup_status WHERE task_id=? AND image_index=? '
+            "UNION ALL SELECT 1 FROM artifact_cleanup_events WHERE task_id=? AND image_index=? AND state='uncertain' LIMIT 1",
+            (task_id, index, task_id, index),
+        )
+        if excluded is not None:
+            raise StateConflict('artifact cleaned or uncertain')
+        for table in ('image_artifacts', 'pending_image_artifacts'):
+            item = await self.worker.fetchone(
+                f'SELECT * FROM {table} WHERE task_id=? AND image_index=?', (task_id, index),
+            )
+            if item is not None:
+                candidate = {key: item[key] for key in ('task_id','image_index','local_path','mime_type','width','height','bytes','sha256')}
+                if not await asyncio.to_thread(self._verify_candidate, candidate):
+                    raise StateConflict('historical artifact missing or changed')
+                return {**candidate, 'evidence': 'historical_digest'}
+        event = await self.worker.fetchone(
+            "SELECT 1 FROM task_events WHERE task_id=? AND to_status='materializing' LIMIT 1", (task_id,),
+        )
+        closure = await self.worker.fetchone('SELECT previous_status FROM closure_records WHERE task_id=?', (task_id,))
+        snapshot = RequestSnapshot.model_validate_json(row['snapshot_json'])
+        if event is None or closure is None or closure['previous_status'] != 'recovery_pending' or snapshot.output_format is not None:
+            raise StateConflict('no evidence linking a legacy static image to this task')
+        return await asyncio.to_thread(self._legacy_candidate, row, index)
+
+    def _legacy_candidate(self, row, index):
+        from .output import _inspect
+        from .storage import inspect_response
+        from zhenzhen_gptimage.providers.t8_star.client import parse_response, ProviderError
+
+        task_id = row['task_id']
+        artifact = inspect_response(self.data_dir, task_id, row['attempt_count'])
+        if artifact is None or artifact.local_path != row['response_ref']:
+            raise StateConflict('no verified response evidence')
+        try:
+            if not 0 < artifact.bytes <= self.materializer.limits.response_bytes:
+                raise StateConflict('response evidence exceeds configured limit')
+            raw = Path(artifact.local_path).read_bytes()
+            if len(raw) != artifact.bytes or hashlib.sha256(raw).hexdigest() != artifact.sha256:
+                raise StateConflict('response evidence changed')
+            entries = parse_response(row['channel'], raw).images
+            entry = entries[index]
+        except (ProviderError, IndexError, OSError) as exc:
+            raise StateConflict('no matching result slot') from exc
+        limits = self.materializer.limits
+        matches = []
+        for suffix in ('.png', '.jpg', '.webp'):
+            path = self.data_dir.absolute() / 'images' / f'{task_id}.{index}{suffix}'
+            if not path.exists() and not path.is_symlink():
+                continue
+            try:
+                with open_managed_image(self.data_dir, path) as stream:
+                    data = stream.read(limits.output_bytes + 1)
+                if len(data) > limits.output_bytes:
+                    raise ValueError('image exceeds size limit')
+                mime, width, height = _inspect(data, limits)
+                if mime != {'.png':'image/png','.jpg':'image/jpeg','.webp':'image/webp'}[suffix]:
+                    raise ValueError('extension does not match image type')
+            except (OSError, ValueError) as exc:
+                raise StateConflict('legacy file invalid or unavailable') from exc
+            if entry.data is not None and data != entry.data:
+                raise StateConflict('image differs from saved embedded result')
+            matches.append(dict(task_id=task_id,image_index=index,local_path=str(path),sha256=hashlib.sha256(data).hexdigest(),
+                                bytes=len(data),mime_type=mime,width=width,height=height,
+                                evidence='embedded_response' if entry.data is not None else 'legacy_unverified'))
+        if len(matches) != 1:
+            raise StateConflict('missing or ambiguous legacy image slot')
+        return matches[0]
+
+    async def export_closed(self, task_id, index, digest, destination, export_root):
+        from zhenzhen_gptimage.generation.admission import _finish_thread
+        async with self.locks.hold(task_id):
+            candidate = await self._closed_candidate(task_id, index)
+            if digest != candidate['sha256']:
+                raise StateConflict('candidate checksum changed')
+            exported = await _finish_thread(lambda: export_original(
+                candidate, export_root, Path(destination), managed_data_dir=self.data_dir))
+            await self.worker.run(lambda db: db.execute(
+                'INSERT INTO recovery_exports(task_id,image_index,sha256,created_at) VALUES (?,?,?,?)',
+                (task_id, index, digest, _now())))
+            return {**exported, 'evidence': candidate['evidence']}
+
+    async def accept_static(self, task_id, digest, *, automatic=False):
+        async with self.locks.hold(task_id):
+            row = await self._row(task_id)
+            record = await self.worker.fetchone('SELECT * FROM static_size_candidates WHERE task_id=?', (task_id,))
+            if record is None or record['digest'] != digest:
+                raise StateConflict('static candidate changed')
+            if row['status'] == 'succeeded' and record['accepted_at'] is not None:
+                return row
+            if row['status'] != 'recovery_pending' or row['error_category'] != 'SIZE_MISMATCH':
+                raise StateConflict('static candidate no longer pending')
+            images = await self.worker.run(lambda db: [dict(i) for i in db.execute(
+                'SELECT * FROM pending_image_artifacts WHERE task_id=? ORDER BY image_index', (task_id,))])
+            identity = [(i['image_index'], i['sha256'], i['width'], i['height']) for i in images]
+            if not images or hashlib.sha256(json.dumps(identity, separators=(',', ':')).encode()).hexdigest() != digest:
+                raise StateConflict('static candidate set changed')
+            for image in images:
+                if not await asyncio.to_thread(self._verify_candidate, image):
+                    raise StateConflict('static candidate unavailable')
+            await self.worker.run(accept_static_size, task_id, row['revision'], digest, _now(), automatic)
+            return await self._row(task_id)
 
     async def accept_gif_size(self, task_id, sha256, width, height):
         async with self.locks.hold(task_id):

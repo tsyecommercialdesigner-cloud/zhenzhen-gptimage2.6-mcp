@@ -61,12 +61,11 @@ async def test_complete_validation_chat_and_dimension_mismatch(tmp_path):
     m=ArtifactMaterializer(tmp_path,transport=httpx.MockTransport(lambda r: httpx.Response(200,content=png(),request=r)))
     try:
         encoded=base64.b64encode(png()).decode()
-        with pytest.raises(ImageResultError) as exc:
-            await m.materialize('abcd',raw({'b64_json':encoded}),channel='images',expected_size=(16,8),deadline=asyncio.get_running_loop().time()+5)
-        assert len(exc.value.artifacts)==1 and Path(exc.value.artifacts[0].local_path).exists()
-        with pytest.raises(ImageResultError) as repeated:
-            await m.materialize('abcd',raw({'b64_json':encoded}),channel='images',expected_size=(16,8),deadline=asyncio.get_running_loop().time()+5)
-        assert repeated.value.artifacts == exc.value.artifacts
+        result = await m.materialize('abcd',raw({'b64_json':encoded}),channel='images',expected_size=(16,8),deadline=asyncio.get_running_loop().time()+5)
+        assert (result[0].width,result[0].height)==(8,8)
+        assert Path(result[0].local_path).read_bytes()==png()
+        repeated = await m.materialize('abcd',raw({'b64_json':encoded}),channel='images',expected_size=(16,8),deadline=asyncio.get_running_loop().time()+5)
+        assert result == repeated
         chat=json.dumps({'choices':[{'message':{'content':'![x](https://example.test/x)'}}]}).encode()
         result=await m.materialize('abce',chat,channel='chat',expected_size=None,deadline=asyncio.get_running_loop().time()+5)
         assert (result[0].width,result[0].height)==(8,8)

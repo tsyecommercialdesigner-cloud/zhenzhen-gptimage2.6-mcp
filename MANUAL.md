@@ -1,6 +1,6 @@
 # zhenzhen-gptimage2.6-mcp 成员使用手册
 
-本手册适用于 [v0.1.8 正式版](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/releases/tag/v0.1.8)；安装前应核对该 Release 的标签与完整提交。面向 Windows 成员；示例使用 PowerShell 和默认安装目录，使用其他目录时需同时修改安装、配置及命令中的路径。
+本手册面向 Windows 成员，适用于 v0.1.9 发布候选。正式 Release、完整提交及本机安装验收待核实。示例使用 PowerShell 和默认安装目录，使用其他目录时需同时修改安装、配置及命令中的路径。
 
 ## 1. 环境准备
 
@@ -33,12 +33,12 @@ git --version
 ```powershell
 $ErrorActionPreference = 'Stop'
 $ProjectDir = 'D:/MCP/zhenzhen-gptimage2.6-mcp'
-$Release = Invoke-RestMethod 'https://api.github.com/repos/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/releases/tags/v0.1.8'
-if ($Release.draft -or $Release.prerelease -or $Release.tag_name -cne 'v0.1.8' -or $Release.target_commitish -notmatch '^[0-9a-f]{40}$') { throw '正式 Release 或完整提交不可用。' }
+$Release = Invoke-RestMethod 'https://api.github.com/repos/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/releases/tags/v0.1.9'
+if ($Release.draft -or $Release.prerelease -or $Release.tag_name -cne 'v0.1.9' -or $Release.target_commitish -notmatch '^[0-9a-f]{40}$') { throw '正式 Release 或完整提交不可用。' }
 $ExpectedCommit = $Release.target_commitish
 if (Test-Path -LiteralPath $ProjectDir) { throw '安装目录已存在，请使用升级步骤。' }
 New-Item -ItemType Directory -Path (Split-Path -Parent $ProjectDir) -Force | Out-Null
-git clone --branch v0.1.8 --single-branch 'https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp.git' $ProjectDir
+git clone --branch v0.1.9 --single-branch 'https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp.git' $ProjectDir
 if ($LASTEXITCODE -ne 0) { throw '克隆失败。' }
 $ActualCommit = git -C $ProjectDir rev-parse HEAD
 if ($LASTEXITCODE -ne 0 -or $ActualCommit -cne $ExpectedCommit) { throw '标签提交不匹配，停止安装。' }
@@ -75,6 +75,8 @@ if ($LASTEXITCODE -ne 0) { throw '入口检查失败。' }
 ```
 
 输出应包含 `--config-dir`、`--env-file`、`--data-dir`。此命令不生图，也不验证 Host 或供应商。完成第 4 节后，在各客户端的新会话中请 Agent 调用 `get_capabilities`；这是本地能力查询，不提交供应商生图。然后可调用 `list_tasks`、`get_task` 或 `get_image` 查询已有任务。图像生成可能收费，只有用户需要并授权时才提交。
+
+v0.1.9 已在开发工作树的隔离配置中通过三个 Desktop 的尺寸提醒和结案原件找回会话验收，详见[恢复契约验收记录](openspec/changes/archive/2026-11-20-improve-mcp-contracts-and-recovery/verification.md)。正式安装及升级验收待复核。
 
 v0.1.8 的发布候选通过 [Windows 完整验收](https://github.com/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/actions/runs/43573530745)，合并提交 `1a4c4310d0eacd4566d8412cc408f0afc31c0cb8` 的文件树与候选一致，合并后检查通过。三个 Desktop 的共享后台并发与满载验收使用当时的正式安装版本，详见[共享后台验收记录](docs/shared-backend-validation.md)；v0.1.8 本机升级与 Host 会话尚未单独复验。
 
@@ -202,24 +204,24 @@ uv --directory 'D:/MCP/zhenzhen-gptimage2.6-mcp' run --no-sync python -m zhenzhe
 
 `ready` 为可连接，`not_available` 为未发现后台，`incompatible` 表示版本或配置不一致。Windows 后台通过 WMI 启动，并要求私有运行目录的所有者和 ACL 正确；失败时检查日志与权限，不要删除数据库或放宽访问控制。
 
-### 升级到 v0.1.8
+### 升级到 v0.1.9
 
 先记录并查询未完成任务，停止所有使用安装目录和数据目录的 MCP 接入与后台；不要因停止而重发结果未知的收费请求。备份 `.env`、其权限、全部数据目录、图片及 SQLite 数据；对数据库使用 [SQLite backup API](docs/database-maintenance.md)，保留备份及恢复所需文件。以下步骤不会替你执行备份；完成备份和停止后运行。工作树有已跟踪改动时停止，不覆盖私有文件。
 
 ```powershell
 $ErrorActionPreference = 'Stop'
 $ProjectDir = 'D:/MCP/zhenzhen-gptimage2.6-mcp'
-$Release = Invoke-RestMethod 'https://api.github.com/repos/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/releases/tags/v0.1.8'
-if ($Release.draft -or $Release.prerelease -or $Release.tag_name -cne 'v0.1.8' -or $Release.target_commitish -notmatch '^[0-9a-f]{40}$') { throw '正式 Release 或完整提交不可用。' }
+$Release = Invoke-RestMethod 'https://api.github.com/repos/tsyecommercialdesigner-cloud/zhenzhen-gptimage2.6-mcp/releases/tags/v0.1.9'
+if ($Release.draft -or $Release.prerelease -or $Release.tag_name -cne 'v0.1.9' -or $Release.target_commitish -notmatch '^[0-9a-f]{40}$') { throw '正式 Release 或完整提交不可用。' }
 $ExpectedCommit = $Release.target_commitish
 $Changes = git -C $ProjectDir status --porcelain
 if ($LASTEXITCODE -ne 0 -or $Changes) { throw '工作树不干净或无法读取，请先处理。' }
 $PreviousCommit = git -C $ProjectDir rev-parse HEAD
 if ($LASTEXITCODE -ne 0) { throw '无法读取当前版本。' }
 Write-Host "升级前提交：$PreviousCommit（请保存用于回滚）"
-git -C $ProjectDir fetch origin tag v0.1.8
+git -C $ProjectDir fetch origin tag v0.1.9
 if ($LASTEXITCODE -ne 0) { throw '获取标签失败。' }
-$TargetCommit = git -C $ProjectDir rev-parse 'refs/tags/v0.1.8^{commit}'
+$TargetCommit = git -C $ProjectDir rev-parse 'refs/tags/v0.1.9^{commit}'
 if ($LASTEXITCODE -ne 0 -or $TargetCommit -cne $ExpectedCommit) { throw '标签提交不匹配。' }
 git -C $ProjectDir switch --detach --no-overwrite-ignore $TargetCommit
 if ($LASTEXITCODE -ne 0) { throw '切换失败，请保留数据并检查。' }
@@ -229,7 +231,7 @@ uv --directory $ProjectDir run --no-sync zhenzhen-gptimage --help
 if ($LASTEXITCODE -ne 0) { throw '入口复验失败。' }
 ```
 
-重新启动 Host 并分别调用 `get_capabilities` 和已有任务查询。数据库可能跨版本迁移：v1→v2、v2→v3 时会建立相应备份；旧版不能直接读取较新的 schema。回滚前先保存升级后的数据库和图片，只有确认旧版兼容或具备经过验证的迁移前备份时，才切换回先前记录的提交并重新 `uv sync --locked --no-dev`；恢复旧备份不会带回备份之后的任务。不要使用 `git reset --hard`、`git clean -fdx` 或删除数据库绕过检查。
+重新启动 Host 并分别调用 `get_capabilities` 和已有任务查询。数据库可能跨版本迁移：v1→v2、v2→v3、v3→v4 时会建立相应备份；旧版不能直接读取较新的 schema。回滚前先保存升级后的数据库和图片，只有确认旧版兼容或具备经过验证的迁移前备份时，才切换回先前记录的提交并重新 `uv sync --locked --no-dev`；恢复旧备份不会带回备份之后的任务。不要使用 `git reset --hard`、`git clean -fdx` 或删除数据库绕过检查。
 
 确认上述数据库兼容或完成经过验证的恢复后，可在服务停止状态下执行以下代码回退程序；它不会自动恢复数据库：
 
@@ -271,7 +273,10 @@ if ($LASTEXITCODE -ne 0) { throw '回滚入口检查失败。' }
 | `get_retention_policy` / `set_retention_policy` | 查询或修改 90 天自动清理策略；启用须用户确认。 |
 | `recover_task` | `task_id`，恢复同一任务，不新建生成。 |
 | `accept_gif_size` | `task_id`、`sha256`、实际 `width` 和 `height`，接受待确认 GIF。 |
-| `close_task` | `task_id`、`expected_status`、`reason`；仅处理允许结案的状态。 |
+| `close_task` | `task_id`、`expected_status`、`reason`。用户确认后结束常规恢复，不取消供应商请求。 |
+| `accept_static_size` | `task_id`、`candidate_digest`。用户确认后原样登记完整静态图候选。 |
+| `inspect_closed_artifact` | `task_id`、可选 `image_index`。检查已结案任务的本地候选。 |
+| `export_closed_artifact` | `task_id`、`sha256`、`destination`、可选 `image_index`。确认后导出已有原件。 |
 | `save_prompt_template` / `get_prompt_template` / `list_prompt_templates` / `render_prompt_template` | 保存、查询、分页浏览和用变量展开模板；更新使用 `expected_version`。 |
 
 Resources：`gptimage://capabilities`、`gptimage://prompt-guide`、`gptimage://recovery-guide`、`gptimage://tool-guide`；后者提供生成、批量、参考图、GIF、SVG、查询、恢复和导出参数示例。Prompt：`optimize_ecommerce_prompt`。是否在界面中显示取决于 Host。模板使用 `{{变量名}}`；详见[模板说明](docs/prompt-templates.md)，其中关于尚未接入的历史文字不代表当前工具注册状态。
@@ -333,6 +338,19 @@ SVG/GIF 仅文生图：通过 `output_format` 指定，`size` 支持 `auto`、�
 ## 9. 注意事项
 
 队列最多 20 个未完成任务，最高 6 个并发；同一模型总计最多 3 次尝试，仅对明确安全的错误自动重试。重复幂等键须对应同一请求；结果不明、超时或取消时先查询任务，不能假设供应商取消或重复付费提交。停止接收和等待在途任务有 30 秒宽限期；之后不再启动请求，必要状态持久化和资源关闭可继续。请求可能收费，供应商及 Host 模型费用分别计算；不得在日志、示例或公开文档中放密钥。网络访问、参考图和结果下载涉及数据传输，应只使用有权处理的内容。
+
+### 尺寸不符、结案与原件找回
+
+- 有效静态图的实际尺寸与请求不符时，任务仍成功。Agent 可从 `warnings` 和 `size_mismatch` 读取 `SIZE_MISMATCH`、请求和实际尺寸，并继续调用 `get_image` 或 `export_image`。批量结果逐项提供尺寸提醒。MCP 按原始尺寸保存文件。
+- `SUBMISSION_UNKNOWN` 可能已受理并计费。使用原任务 ID 或原幂等键查询。用户明确决定结案时，按任务当前的 `expected_status` 与用户说明的 `reason` 调用 `close_task` 并确认。
+- 已结案时，用 `inspect_closed_artifact` 提供 `task_id` 和 `image_index: 0`。检查 `evidence`、尺寸和摘要。若为 `legacy_unverified`，旧版没有记录原始摘要，需要用户核对并确认该候选。随后调用 `export_closed_artifact`，使用返回的 `sha256`、同一个任务 ID 和索引，并给出如 `D:/output/recovered.png` 的未占用绝对路径。导出不重开任务。
+- Host 无法请求确认时，工具会返回一次性计划 ID。由用户在本机 PowerShell 审查并确认。以下命令使用手册的默认安装位置。使用自定义目录时按 Host 的实际配置替换。
+
+```powershell
+$Install = 'D:/MCP/zhenzhen-gptimage2.6-mcp'
+$PlanId = Read-Host '粘贴工具返回的 plan_id'
+& "$Install/.venv/Scripts/python.exe" -m zhenzhen_gptimage.mcp_api.backend_control approve-recovery --plan-id $PlanId --config-dir $Install --data-dir "$Install/runtime-data/shared"
+```
 
 ## 10. 常见问题
 

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from zhenzhen_gptimage.bootstrap.config import load_config
 from .discovery import read_endpoint
-from .local_ipc import connect, read_frame, write_frame
+from .local_ipc import RemoteBackend, connect, read_frame, write_frame
 from .shared_launch import backend_identity, probe_backend
 from .startup_coordinator import Probe
 
@@ -46,7 +46,7 @@ async def enable_auto_control(endpoint, identity):
 
 def main():
     parser = argparse.ArgumentParser(description='Inspect or control the local image backend')
-    parser.add_argument('action', choices=('status', 'stop', 'approve-cleanup', 'enable-auto-cleanup'))
+    parser.add_argument('action', choices=('status', 'stop', 'approve-cleanup', 'enable-auto-cleanup', 'approve-recovery'))
     parser.add_argument('--plan-id')
     parser.add_argument('--config-dir', type=Path, default=Path.cwd())
     parser.add_argument('--data-dir', type=Path, default=Path.cwd() / 'runtime-data')
@@ -60,6 +60,28 @@ def main():
     if status is Probe.ABSENT:
         print(json.dumps({'status': 'not_available'}))
         return 0 if args.action == 'status' else 1
+    if args.action == 'approve-recovery':
+        if not args.plan_id or not sys.stdin.isatty() or not sys.stdout.isatty():
+            print('Approval requires a plan ID and an interactive local terminal.', file=sys.stderr)
+            return 1
+        endpoint = read_endpoint(config.data_dir)
+        if endpoint is None:
+            print('Backend unavailable.', file=sys.stderr)
+            return 1
+        identity = backend_identity(config, args.config_dir, endpoint.token)
+        backend = RemoteBackend(endpoint, identity)
+        result = asyncio.run(backend.call('__recovery_plan__', {'plan_id': args.plan_id}))
+        if not result['ok']:
+            print('Plan is missing or expired.', file=sys.stderr)
+            return 1
+        print(json.dumps(result['data'], ensure_ascii=False, indent=2))
+        if input(f'Type APPROVE {args.plan_id} to execute this exact operation: ') != f'APPROVE {args.plan_id}':
+            print('Not approved.')
+            return 1
+        result = asyncio.run(backend.call('__execute_recovery__', {'plan_id': args.plan_id}))
+        result.pop('_preview', None)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result['ok'] else 1
     if args.action == 'enable-auto-cleanup':
         if not sys.stdin.isatty() or not sys.stdout.isatty():
             print('Enabling requires an interactive local terminal.', file=sys.stderr)

@@ -52,7 +52,18 @@ def capabilities() -> dict[str, Any]:
             'evidence': {'images_png_single_flare': 'verified', 'flux_target_models': 'pending',
                          'chat_basic': 'reference', 'chat_custom_size': 'blocked',
                          'svg_flare_luna_1024': 'provider_verified', 'gif_flare': 'provider_verified',
-                         'other_svg_gif_combinations': 'not_verified'}}
+                         'other_svg_gif_combinations': 'not_verified'},
+            'local_constraints': {'static_width_height': {'min': 1, 'max': 4096},
+                                  'pixel_multiple_of_16_formats': ['gif', 'svg'],
+                                  'tier_max_long_edge': {'base': 1024, '2k': 2048, '4k': 4096}},
+            'enabled_modes': {'sync': 'see channel and format constraints',
+                              'async': [{'channel': 'images', 'model': 'gpt-image-2.6-flare', 'format': 'gif'}]},
+            'provider_evidence': [
+                {'channel': 'images', 'model': 'gpt-image-2.6-flare', 'format': 'png',
+                 'mode': 'sync', 'width': 800, 'height': 800, 'reference_count': 2,
+                 'scope': 'one successful task; other combinations not inferred'},
+                {'channel': 'images', 'model': 'gpt-image-2.6-flare', 'format': 'gif',
+                 'mode': 'async', 'scope': 'remote task ID, completion and animation observed'}]}
 
 
 def create_server(backend: Backend | None = None) -> FastMCP:
@@ -84,7 +95,7 @@ def create_server(backend: Backend | None = None) -> FastMCP:
                 if warning not in result['warnings']: result['warnings'].append(warning)
             return ProtocolResult(result)
         except IPCOutcomeUnknown:
-            return ProtocolResult(_failure('SUBMISSION_UNKNOWN', '调用结果未知', '使用原任务 ID 或幂等键查询；不要重复提交'))
+            return ProtocolResult(_failure('SUBMISSION_UNKNOWN', '调用结果未知，供应商可能已受理并产生费用', '使用原任务 ID 或幂等键查询；未经用户授权不得另行提交'))
         except Exception:
             return ProtocolResult(_failure('PERSISTENCE_ERROR', '服务执行失败', '检查本地日志和任务状态'))
 
@@ -170,8 +181,44 @@ def create_server(backend: Backend | None = None) -> FastMCP:
     async def recover_task(task_id: str): return await dispatch('recover_task', locals())
     @app.tool
     async def accept_gif_size(task_id: str, sha256: str, width: int, height: int): return await dispatch('accept_gif_size', locals())
+    async def confirmed_recovery(name, args, ctx):
+        if backend is None:
+            return ProtocolResult(_failure('CONFIG_ERROR', '恢复功能尚未接入', '检查服务配置'))
+        try:
+            value = TOOL_INPUTS[name].model_validate(args).model_dump()
+        except ValidationError as exc:
+            message, action = safe_validation_error(name, args, exc)
+            return ProtocolResult(_failure('INVALID_ARGUMENT', message, action))
+        plan = await backend.call('__prepare_recovery__', {'action': name, 'arguments': value})
+        if not plan['ok'] or 'plan_id' not in plan['data']:
+            return ProtocolResult(plan)
+        details = plan['data']
+        try:
+            response = await ctx.elicit(json.dumps(details, ensure_ascii=False, indent=2))
+        except Exception:
+            return ProtocolResult({**_failure('STATE_CONFLICT', '当前 Host 无法请求用户确认',
+                '请用户在本机交互式终端运行 backend_control approve-recovery --plan-id <plan_id>，并指定当前配置和数据目录'),
+                'data': details})
+        if response.action != 'accept':
+            return ProtocolResult(_failure('STATE_CONFLICT', '用户未确认此操作', '保留原任务状态'))
+        return ProtocolResult(await backend.call('__execute_recovery__', {'plan_id': details['plan_id']}))
+
     @app.tool
-    async def close_task(task_id: str, expected_status: str, reason: str): return await dispatch('close_task', locals())
+    async def close_task(task_id: str, expected_status: str, reason: str, ctx: Context):
+        return await confirmed_recovery('close_task', dict(task_id=task_id, expected_status=expected_status, reason=reason), ctx)
+
+    @app.tool
+    async def accept_static_size(task_id: str, candidate_digest: str, ctx: Context):
+        return await confirmed_recovery('accept_static_size', dict(task_id=task_id, candidate_digest=candidate_digest), ctx)
+
+    @app.tool
+    async def inspect_closed_artifact(task_id: str, image_index: int = 0):
+        return await dispatch('inspect_closed_artifact', locals())
+
+    @app.tool
+    async def export_closed_artifact(task_id: str, sha256: str, destination: str, ctx: Context, image_index: int = 0):
+        return await confirmed_recovery('export_closed_artifact',
+            dict(task_id=task_id, image_index=image_index, sha256=sha256, destination=destination), ctx)
     @app.tool
     async def save_prompt_template(code: str, content: str, variables: list[dict[str, Any]], expected_version: int | None = None):
         return await dispatch('save_prompt_template', locals())
@@ -193,7 +240,8 @@ def create_server(backend: Backend | None = None) -> FastMCP:
         'authorize_cleanup': authorize_cleanup,
         'get_retention_policy': get_retention_policy, 'set_retention_policy': set_retention_policy,
         'recover_task': recover_task, 'close_task': close_task,
-        'accept_gif_size': accept_gif_size,
+        'accept_gif_size': accept_gif_size, 'accept_static_size': accept_static_size,
+        'inspect_closed_artifact': inspect_closed_artifact, 'export_closed_artifact': export_closed_artifact,
         'save_prompt_template': save_prompt_template, 'get_prompt_template': get_prompt_template,
         'list_prompt_templates': list_prompt_templates, 'render_prompt_template': render_prompt_template,
     }
