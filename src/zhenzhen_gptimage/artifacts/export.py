@@ -71,7 +71,44 @@ def _posix_parent(root: Path, parent: Path):
             os.close(fd)
 
 
-def export_original(row: dict, root: Path | None, destination: Path) -> dict:
+@contextmanager
+def open_managed_image(data_dir: Path, path: Path):
+    """Open an image slot without following directory or file links."""
+    bucket = data_dir.absolute() / 'images'
+    if not path.is_absolute() or path.parent != bucket:
+        raise ValueError('unmanaged image path')
+    if os.name == 'nt':
+        import msvcrt
+        import pywintypes
+        import win32con
+        import win32file
+        try:
+            with _windows_locked_directories(Path(bucket.anchor), bucket):
+                handle = win32file.CreateFile(
+                    str(path), win32con.GENERIC_READ, win32con.FILE_SHARE_READ,
+                    None, win32con.OPEN_EXISTING, win32file.FILE_FLAG_OPEN_REPARSE_POINT, None,
+                )
+                try:
+                    flags = win32file.GetFileInformationByHandle(handle)[0]
+                    if flags & (win32con.FILE_ATTRIBUTE_REPARSE_POINT | win32con.FILE_ATTRIBUTE_DIRECTORY):
+                        raise ValueError('not an ordinary image file')
+                    fd = msvcrt.open_osfhandle(handle.Detach(), os.O_RDONLY | os.O_BINARY)
+                    with os.fdopen(fd, 'rb') as stream:
+                        yield stream
+                finally:
+                    handle.Close()
+        except pywintypes.error as exc:
+            raise OSError('cannot open managed image') from exc
+    else:
+        with _posix_parent(bucket, bucket) as parent_fd:
+            fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+            with os.fdopen(fd, 'rb') as stream:
+                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                    raise ValueError('not an ordinary image file')
+                yield stream
+
+
+def export_original(row: dict, root: Path | None, destination: Path, *, managed_data_dir: Path | None = None) -> dict:
     destination = validate_export_destination(root, destination)
     root = Path(destination.anchor)
     expected_extension = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp',
@@ -80,7 +117,7 @@ def export_original(row: dict, root: Path | None, destination: Path) -> dict:
     if expected_extension is None or (suffix != expected_extension and not (expected_extension == '.jpg' and suffix == '.jpeg')):
         raise ValueError('destination extension does not match original format')
     source = Path(row['local_path'])
-    if source.is_symlink() or not source.is_file():
+    if managed_data_dir is None and (source.is_symlink() or not source.is_file()):
         raise FileNotFoundError('original unavailable')
     temporary = f'.export-{uuid4().hex}.partial'
     digest = sha256()
@@ -95,7 +132,8 @@ def export_original(row: dict, root: Path | None, destination: Path) -> dict:
             fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600, dir_fd=parent_fd)
             target = stack.enter_context(os.fdopen(fd, 'wb'))
         try:
-            with source.open('rb') as original:
+            opener = source.open('rb') if managed_data_dir is None else open_managed_image(managed_data_dir, source)
+            with opener as original:
                 if not stat.S_ISREG(os.fstat(original.fileno()).st_mode):
                     raise ValueError('original is not a regular file')
                 for chunk in iter(lambda: original.read(1024 * 1024), b''):
